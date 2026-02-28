@@ -23,7 +23,6 @@ class UserRoute extends BaseRoute {
     this.router.get("/getMe", [this.authentication], this.route(this.getMe));
     this.router.get(
       "/getAllUser",
-      [this.authentication],
       this.route(this.getAllUser),
     );
     this.router.get(
