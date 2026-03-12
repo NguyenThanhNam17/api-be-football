@@ -1,43 +1,81 @@
-import mongoose from "mongoose";
+import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
-import { TypeFieldEnum } from "../../constants/model.const";
 
 export type IField = BaseDocument & {
   name: string;
+  slug: string;
+  address: string;
+  district: string;
   type: string;
+  openHours: string;
   pricePerHour: number;
-  location?: string;
+  rating?: number;
+  coverImage?: string;
+  article?: string;
   images?: string[];
-  description?: string;
-  isActive?: boolean;
-  slug?: string;
+  ownerUserId?: Schema.Types.ObjectId;
+  ownerFullName?: string;
+  managedByAdmin?: boolean;
   isDeleted?: boolean;
 };
 
 const fieldSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, trim: true },
-    type: { 
-      type: String, 
-      enum: Object.values(TypeFieldEnum), 
-      required: true 
-    },
-    pricePerHour: { 
-      type: Number, 
+    name: {
+      type: String,
       required: true,
-      min: 0
+      trim: true,
     },
-    location: { type: String, trim: true },
-    images: { type: [String], default: [] },
-    description: { type: String },
-    slug: { type: String, unique: true },
-    isActive: { type: Boolean, default: true },
-    isDeleted: { type: Boolean, default: false }
+    slug: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    address: {
+      type: String,
+      required: true,
+    },
+    district: {
+      type: String,
+      required: true,
+    },
+    type: {
+      type: String,
+      required: true,
+    },
+    openHours: {
+      type: String,
+    },
+    pricePerHour: {
+      type: Number,
+      required: true,
+    },
+    rating: {
+      type: Number,
+      default: 0,
+    },
+    coverImage: {
+      type: String,
+    },
+    article: {
+      type: String,
+    },
+    images: [{ type: String }],
+    ownerUserId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    ownerFullName: {
+      type: String,
+    },
+    managedByAdmin: {
+      type: Boolean,
+      default: false,
+    },
+    isDeleted: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
-
-fieldSchema.index({ slug: 1 });
 
 const FieldModel = mongoose.model<IField>("Field", fieldSchema);
 export { FieldModel };

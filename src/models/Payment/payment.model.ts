@@ -1,55 +1,62 @@
 import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
-import {
-  PaymentMethodEnum,
-  PaymentStatusEnum,
-} from "../../constants/model.const";
 
 export type IPayment = BaseDocument & {
-  booking: mongoose.Types.ObjectId;
+  bookingId: Schema.Types.ObjectId;
+  userId: Schema.Types.ObjectId;
   amount: number;
   method: string;
   status: string;
-  transactionId: string;
-  description?: string;
-  isActive?: boolean;
+  qrCode?: string;
+  transactionCode?: string;
+  isDeleted?: boolean;
 };
 
 const paymentSchema = new mongoose.Schema(
   {
-    booking: { 
-      type: Schema.Types.ObjectId, 
-      ref: "Booking", 
+    bookingId: {
+      type: Schema.Types.ObjectId,
+      ref: "Booking",
       required: true,
       index: true
     },
-    amount: { 
-      type: Number, 
+
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
+    amount: {
+      type: Number,
       required: true,
       min: 0
     },
+
     method: {
       type: String,
-      enum: Object.values(PaymentMethodEnum),
-      required: true,
+      enum: ["bank_transfer", "momo", "cash"],
+      default: "bank_transfer"
     },
-    status: { 
-      type: String, 
-      enum: Object.values(PaymentStatusEnum),
-      default: PaymentStatusEnum.PENDING
+
+    status: {
+      type: String,
+      enum: ["pending", "paid", "failed"],
+      default: "pending"
     },
-    transactionId: { 
-      type: String, 
-      required: true,
-      unique: true
+
+    qrCode: {
+      type: String
     },
-    description: { type: String },
-    isActive: { type: Boolean, default: true }
+
+    transactionCode: {
+      type: String
+    },
+
+    isDeleted: { type: Boolean, default: false }
   },
   { timestamps: true }
 );
-
-paymentSchema.index({ transactionId: 1 });
 
 const PaymentModel = mongoose.model<IPayment>("Payment", paymentSchema);
 export { PaymentModel };

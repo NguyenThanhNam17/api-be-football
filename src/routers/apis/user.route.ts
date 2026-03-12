@@ -10,7 +10,6 @@ import passwordHash from "password-hash";
 import { TokenHelper } from "../../helper/token.helper";
 import { UserHelper } from "../../models/user/user.helper";
 import { ROLES } from "../../constants/role.const";
-import { WalletModel } from "../../models/wallet/wallet.model";
 
 class UserRoute extends BaseRoute {
   constructor() {
@@ -21,10 +20,7 @@ class UserRoute extends BaseRoute {
     this.router.post("/login", this.route(this.login));
     this.router.post("/register", this.route(this.register));
     this.router.get("/getMe", [this.authentication], this.route(this.getMe));
-    this.router.get(
-      "/getAllUser",
-      this.route(this.getAllUser),
-    );
+    this.router.get("/getAllUser", this.route(this.getAllUser));
     this.router.get(
       "/getOneUser",
       [this.authentication],
@@ -126,13 +122,6 @@ class UserRoute extends BaseRoute {
       role: ROLES.CLIENT,
     });
 
-    let wallet = new WalletModel({
-      userId: user._id,
-      balance: 0,
-    });
-
-    await wallet.save();
-    user.walletId = wallet._id;
     await user.save();
 
     return res.status(200).json({
