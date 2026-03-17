@@ -1,14 +1,12 @@
 import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
+import { TypeFieldEnum } from "../../constants/model.const";
 
 export type IField = BaseDocument & {
-  name: string;
-  slug: string;
-  address: string;
-  district: string;
-  type: string;
-  openHours: string;
-  pricePerHour: number;
+  name?: string;
+  slug?: string;
+  address?: string;
+  district?: string;
   rating?: number;
   coverImage?: string;
   article?: string;
@@ -26,53 +24,64 @@ const fieldSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+
     slug: {
       type: String,
       required: true,
       unique: true,
     },
+
     address: {
       type: String,
       required: true,
     },
+
     district: {
       type: String,
       required: true,
     },
-    type: {
-      type: String,
-      required: true,
-    },
-    openHours: {
-      type: String,
-    },
+
     pricePerHour: {
       type: Number,
       required: true,
+      min: 0,
     },
+
     rating: {
       type: Number,
       default: 0,
+      min: 0,
+      max: 5,
     },
+
     coverImage: {
       type: String,
     },
+
     article: {
       type: String,
     },
+
     images: [{ type: String }],
+
     ownerUserId: {
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+
     ownerFullName: {
       type: String,
     },
+
     managedByAdmin: {
       type: Boolean,
       default: false,
     },
-    isDeleted: { type: Boolean, default: false },
+
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );
