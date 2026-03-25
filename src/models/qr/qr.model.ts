@@ -1,8 +1,8 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
 
 export type IQRCode = BaseDocument & {
-  paymentId: Schema.Types.ObjectId;
+  paymentId: Types.ObjectId;
   qrImage: string;
   expiredAt?: Date;
 };

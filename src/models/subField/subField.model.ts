@@ -32,7 +32,7 @@ const subFieldSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["5", "7", "11"],
+      enum: Object.values(TypeFieldEnum),
       required: true,
     },
 

@@ -1,5 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
+import { UserRoleEnum } from "../../constants/model.const";
 
 export type IUser = BaseDocument & {
   name: string;
@@ -34,8 +35,8 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["user", "admin", "owner"],
-      default: "user",
+      enum: Object.values(UserRoleEnum),
+      default: UserRoleEnum.USER,
     },
     isDeleted: { type: Boolean, default: false },
   },

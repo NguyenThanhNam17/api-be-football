@@ -4,7 +4,8 @@ import { BaseDocument } from "../../base/baseModel";
 export type ITimeSlot = BaseDocument & {
   startTime: string;
   endTime: string;
-  isActive?: boolean;
+  label: string;
+  isDeleted?: boolean;
 };
 
 const timeSlotSchema = new mongoose.Schema(
@@ -19,13 +20,27 @@ const timeSlotSchema = new mongoose.Schema(
       required: true,
     },
 
-    isActive: {
+    label: {
+      type: String,
+      required: true,
+    },
+
+    isDeleted: {
       type: Boolean,
-      default: true,
+      default: false,
     },
   },
   { timestamps: true },
 );
 
-const TimeSlotModel = mongoose.model<ITimeSlot>("TimeSlot", timeSlotSchema);
+timeSlotSchema.index(
+  { startTime: 1, endTime: 1 },
+  { unique: true }
+);
+
+const TimeSlotModel = mongoose.model<ITimeSlot>(
+  "TimeSlot",
+  timeSlotSchema
+);
+
 export { TimeSlotModel };

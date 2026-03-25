@@ -1,12 +1,16 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
+import {
+  BookingStatusEnum,
+  DepositMethodEnum,
+  DepositStatusEnum,
+} from "../../constants/model.const";
 
 export type IBooking = BaseDocument & {
-  userId: Schema.Types.ObjectId;
-  fieldId: Schema.Types.ObjectId;
-  subFieldId: Schema.Types.ObjectId;
-  timeSlotId: Schema.Types.ObjectId;
-
+  userId:  Types.ObjectId;
+  fieldId:  Types.ObjectId;
+  subFieldId:  Types.ObjectId;
+  timeSlotId:  Types.ObjectId;
   date: Date;
   phone: string;
   note?: string;
@@ -77,18 +81,20 @@ const bookingSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "confirmed", "playing", "completed", "cancelled"],
-      default: "pending",
+      enum: Object.values(BookingStatusEnum),
+      default: BookingStatusEnum.PENDING,
     },
 
     depositStatus: {
       type: String,
-      enum: ["unpaid", "paid"],
-      default: "unpaid",
+      enum: Object.values(DepositStatusEnum),
+      default: DepositStatusEnum.UNPAID,
     },
 
     depositMethod: {
       type: String,
+      enum: Object.values(DepositMethodEnum),
+      default: DepositMethodEnum.CASH,
     },
 
     note: {

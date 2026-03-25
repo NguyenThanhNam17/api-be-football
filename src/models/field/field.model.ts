@@ -41,12 +41,6 @@ const fieldSchema = new mongoose.Schema(
       required: true,
     },
 
-    pricePerHour: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-
     rating: {
       type: Number,
       default: 0,

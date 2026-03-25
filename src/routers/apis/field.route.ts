@@ -45,7 +45,7 @@ class FieldRoute extends BaseRoute {
         throw ErrorHelper.unauthorized();
       }
       const tokenData: any = TokenHelper.decodeToken(req.get("x-token"));
-      if ([ROLES.ADMIN, ROLES.CLIENT].includes(tokenData.role_)) {
+      if ([ROLES.ADMIN, ROLES.USER, ROLES.OWNER].includes(tokenData.role_)) {
         const user = await UserModel.findById(tokenData._id);
         if (!user) {
           throw ErrorHelper.unauthorized();
