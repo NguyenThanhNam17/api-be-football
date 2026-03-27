@@ -40,3 +40,9 @@ export enum PaymentMethodEnum {
   MOMO = "MOMO",
   BANK = "BANK",
 }
+
+export enum FieldStatusEnum {
+  PENDING = "PENDING",  
+  APPROVED = "APPROVED", 
+  REJECTED = "REJECTED", 
+}

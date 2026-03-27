@@ -250,11 +250,11 @@ class SubFieldRoute extends BaseRoute {
     }
 
     if (
+      req.tokenInfo.role_ !== ROLES.ADMIN &&
       !(
         req.tokenInfo.role_ === ROLES.OWNER &&
         field.ownerUserId.toString() === req.tokenInfo._id
-      ) ||
-      req.tokenInfo.role_ !== ROLES.ADMIN
+      )
     ) {
       throw ErrorHelper.permissionDeny();
     }

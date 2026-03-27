@@ -9,6 +9,7 @@ import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import { FieldModel } from "../../models/field/field.model";
+import { FieldStatusEnum } from "../../constants/model.const";
 
 class FieldRoute extends BaseRoute {
   constructor() {
@@ -36,6 +37,17 @@ class FieldRoute extends BaseRoute {
       "/updateField/:id",
       [this.authentication],
       this.route(this.updateField),
+    );
+    this.router.post(
+      "/approveField/:fieldId",
+      [this.authentication],
+      this.route(this.approveField),
+    );
+
+    this.router.post(
+      "/rejectField/:fieldId",
+      [this.authentication],
+      this.route(this.rejectField),
     );
   }
 
@@ -101,6 +113,7 @@ class FieldRoute extends BaseRoute {
       ownerUserId: req.tokenInfo._id,
       ownerFullName: req.tokenInfo.name,
       managedByAdmin: managedByAdmin || false,
+      status: FieldStatusEnum.PENDING,
       isDeleted: false,
     });
 
@@ -126,6 +139,7 @@ class FieldRoute extends BaseRoute {
     const field = await FieldModel.findOne({
       _id: id,
       isDeleted: false,
+      status: FieldStatusEnum.APPROVED,
     }).populate("ownerUserId", "name phone");
 
     if (!field) {
@@ -221,11 +235,10 @@ class FieldRoute extends BaseRoute {
 
     if (
       req.tokenInfo.role_ === ROLES.OWNER &&
-      field.ownerUserId.toString() !== req.tokenInfo.userId
+      field.ownerUserId.toString() !== req.tokenInfo._id
     ) {
       throw ErrorHelper.forbidden("Bạn không sở hữu sân này");
     }
-
     const { name, address, district, coverImage, article, images } = req.body;
 
     if (name !== undefined) field.name = name;
@@ -240,8 +253,59 @@ class FieldRoute extends BaseRoute {
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "Cập nhật sân thành công",
+      message: "success",
       data: field,
+    });
+  }
+  async approveField(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { fieldId } = req.params;
+
+    const field = await FieldModel.findById(fieldId);
+
+    if (!field) {
+      throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
+    }
+
+    field.status = FieldStatusEnum.APPROVED;
+    field.rejectReason = undefined;
+
+    await field.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { field },
+    });
+  }
+  async rejectField(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { fieldId } = req.params;
+    const { reason } = req.body;
+
+    const field = await FieldModel.findById(fieldId);
+
+    if (!field) {
+      throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
+    }
+
+    field.status = FieldStatusEnum.REJECTED;
+    field.rejectReason = reason || "Không hợp lệ";
+
+    await field.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { field },
     });
   }
 }

@@ -46,6 +46,37 @@ class UserRoute extends BaseRoute {
       [this.authentication],
       this.route(this.updateUserForAdmin),
     );
+    this.router.post(
+      "/requestOwner",
+      [this.authentication],
+      this.route(this.requestOwner),
+    );
+    this.router.post(
+      "/approveOwner/:userId",
+      [this.authentication],
+      this.route(this.approveOwner),
+    );
+    this.router.get(
+      "/getOwnerRequests",
+      [this.authentication],
+      this.route(this.getOwnerRequests),
+    );
+    this.router.post(
+      "/rejectOwner/:userId",
+      [this.authentication],
+      this.route(this.rejectOwner),
+    );
+    this.router.delete(
+      "/deleteUserByAdmin/:userId",
+      [this.authentication],
+      this.route(this.deleteUserByAdmin),
+    );
+
+    this.router.post(
+      "/downgradeOwner/:userId",
+      [this.authentication],
+      this.route(this.downgradeOwner),
+    );
   }
 
   async authentication(req: Request, res: Response, next: NextFunction) {
@@ -119,7 +150,7 @@ class UserRoute extends BaseRoute {
       phone: phone,
       password: passwordHash.generate(password),
       key: key,
-      role: ROLES.CLIENT,
+      role: ROLES.USER,
     });
 
     await user.save();
@@ -285,6 +316,171 @@ class UserRoute extends BaseRoute {
       data: {
         user,
       },
+    });
+  }
+
+  async requestOwner(req: Request, res: Response) {
+    const user = await UserModel.findById(req.tokenInfo._id);
+
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (user.role === ROLES.OWNER) {
+      throw ErrorHelper.requestDataInvalid("Bạn đã là chủ sân");
+    }
+
+    if (user.isRequestOwner) {
+      throw ErrorHelper.requestDataInvalid("Bạn đã gửi yêu cầu rồi");
+    }
+
+    user.isRequestOwner = true;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { user },
+    });
+  }
+
+  async approveOwner(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { userId } = req.params;
+
+    if (!userId) {
+      throw ErrorHelper.requestDataInvalid("Thiếu userId");
+    }
+
+    const user = await UserModel.findById(userId);
+
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (!user.isRequestOwner) {
+      throw ErrorHelper.requestDataInvalid("User chưa gửi yêu cầu");
+    }
+
+    user.role = ROLES.OWNER;
+    user.isRequestOwner = false;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { user },
+    });
+  }
+
+  async getOwnerRequests(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const users = await UserModel.find({
+      isRequestOwner: true,
+      isDeleted: false,
+    }).select("name email phone createdAt");
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        users,
+      },
+    });
+  }
+  async rejectOwner(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { userId } = req.params;
+
+    const user = await UserModel.findById(userId);
+
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (!user.isRequestOwner) {
+      throw ErrorHelper.requestDataInvalid("User chưa gửi yêu cầu");
+    }
+
+    user.isRequestOwner = false;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { user },
+    });
+  }
+  async deleteUserByAdmin(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { userId } = req.params;
+
+    const user = await UserModel.findById(userId);
+
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (user._id.toString() === req.tokenInfo._id) {
+      throw ErrorHelper.requestDataInvalid("Không thể xoá chính mình");
+    }
+
+    user.isDeleted = true;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+    });
+  }
+
+  async downgradeOwner(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const { userId } = req.params;
+
+    const user = await UserModel.findById(userId);
+
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (user.role !== ROLES.OWNER) {
+      throw ErrorHelper.requestDataInvalid("User không phải OWNER");
+    }
+
+    user.role = ROLES.USER;
+
+    await user.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { user },
     });
   }
 }

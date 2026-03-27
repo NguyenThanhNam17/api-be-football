@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
-import { TypeFieldEnum } from "../../constants/model.const";
+import { FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
 
 export type IField = BaseDocument & {
   name?: string;
@@ -14,7 +14,9 @@ export type IField = BaseDocument & {
   ownerUserId?: Schema.Types.ObjectId;
   ownerFullName?: string;
   managedByAdmin?: boolean;
+  status?: FieldStatusEnum;
   isDeleted?: boolean;
+  rejectReason?: string;
 };
 
 const fieldSchema = new mongoose.Schema(
@@ -75,6 +77,14 @@ const fieldSchema = new mongoose.Schema(
     isDeleted: {
       type: Boolean,
       default: false,
+    },
+    status: {
+      type: String,
+      enum: Object.values(FieldStatusEnum),
+      default: FieldStatusEnum.PENDING,
+    },
+    rejectReason: {
+      type: String,
     },
   },
   { timestamps: true },
