@@ -8,6 +8,7 @@ export enum TypeFieldEnum {
   _5_nguoi = "5-nguoi",
   _7_nguoi = "7-nguoi",
   _11_nguoi = "11-nguoi",
+  _futsal = "futsal"
 }
 
 export enum BookingStatusEnum {
@@ -45,4 +46,6 @@ export enum FieldStatusEnum {
   PENDING = "PENDING",  
   APPROVED = "APPROVED", 
   REJECTED = "REJECTED", 
+  LOCKED = "LOCKED",
 }
+

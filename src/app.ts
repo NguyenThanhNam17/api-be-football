@@ -1,6 +1,8 @@
 import express from "express";
 import router from "./routers";
 import cors from "cors";
+import path from "path";
+
 
 const app = express();
 
@@ -14,9 +16,12 @@ app.use(
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use("/uploads", express.static("uploads"));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 
 app.get("/", (req, res) => {
-    const dbStatus = req.app.locals.isMongoConnected();
+  const dbStatus = req.app.locals.isMongoConnected();
   res.send(`
     <h1>Nguyễn Thành Nam - DH52201080 - D22-TH03</h1>
     <p>Status API: Running </p>
@@ -24,11 +29,7 @@ app.get("/", (req, res) => {
       <li>/api/user/getAllUser</li>
     </ul>
 
-     <p>Database: ${
-      dbStatus
-        ? "Connected "
-        : "Disconnected "
-    }</p>
+     <p>Database: ${dbStatus ? "Connected " : "Disconnected "}</p>
   `);
 });
 app.use("/", router);

@@ -30,6 +30,10 @@ class SubFieldRoute extends BaseRoute {
       this.route(this.deleteSubField),
     );
     this.router.get(
+      "/getByField/:fieldId",
+      this.route(this.getSubFieldByField),
+    );
+    this.router.get(
       "/getSubFieldDetail/:id",
       [this.authentication],
       this.route(this.getSubFieldDetail),
@@ -62,10 +66,44 @@ class SubFieldRoute extends BaseRoute {
     }
   }
 
+  async getSubFieldByField(req: Request, res: Response) {
+    const { fieldId } = req.params;
+
+    if (!fieldId) {
+      throw ErrorHelper.requestDataInvalid("Thiếu fieldId");
+    }
+
+    const field = await FieldModel.findOne({
+      _id: fieldId,
+      isDeleted: false,
+    });
+
+    if (!field) {
+      throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
+    }
+
+    const subFields = await SubFieldModel.find({
+      fieldId: fieldId,
+      isDeleted: false,
+    });
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        subFields,
+      },
+    });
+  }
+
   async createSubField(req: Request, res: Response) {
-    let { fieldId, key, name, type, pricePerHour } = req.body;
+    let { fieldId, key, name, type, pricePerHour, openHours } = req.body;
     if (!fieldId || !key || !name || !type || pricePerHour === undefined) {
       throw ErrorHelper.requestDataInvalid("Missing required fields");
+    }
+    if (openHours && typeof openHours !== "string") {
+      throw ErrorHelper.requestDataInvalid("openHours phải là string");
     }
 
     if (!Object.values(TypeFieldEnum).includes(type)) {
@@ -104,6 +142,7 @@ class SubFieldRoute extends BaseRoute {
       name,
       type,
       pricePerHour,
+      openHours,
       isDeleted: false,
     });
 
@@ -226,7 +265,7 @@ class SubFieldRoute extends BaseRoute {
 
   async updateSubField(req: Request, res: Response) {
     const { id } = req.params;
-    let { key, name, type, pricePerHour } = req.body;
+    let { key, name, type, pricePerHour, openHours } = req.body;
 
     if (!id) {
       throw ErrorHelper.requestDataInvalid("Id sân con không hợp lệ");
@@ -284,6 +323,7 @@ class SubFieldRoute extends BaseRoute {
         throw ErrorHelper.requestDataInvalid("Giá không hợp lệ");
       }
       subField.pricePerHour = pricePerHour;
+      if (openHours !== undefined) subField.openHours = openHours;
     }
 
     await subField.save();

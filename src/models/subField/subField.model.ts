@@ -1,13 +1,14 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
 import { TypeFieldEnum } from "../../constants/model.const";
 
 export type ISubField = BaseDocument & {
-  fieldId: Schema.Types.ObjectId;
+  fieldId: Types.ObjectId;
   key: string;
   name: string;
   type: TypeFieldEnum;
   pricePerHour: number;
+  openHours?: string;
   isDeleted?: boolean;
 };
 
@@ -40,6 +41,9 @@ const subFieldSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
+    },
+    openHours: {
+      type: String,
     },
 
     isDeleted: {

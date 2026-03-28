@@ -17,6 +17,9 @@ export type IField = BaseDocument & {
   status?: FieldStatusEnum;
   isDeleted?: boolean;
   rejectReason?: string;
+  type?: TypeFieldEnum;
+  openHours?: string;
+  pricePerHour?: number;
 };
 
 const fieldSchema = new mongoose.Schema(
@@ -86,6 +89,20 @@ const fieldSchema = new mongoose.Schema(
     rejectReason: {
       type: String,
     },
+   type: {
+  type: String,
+  enum: Object.values(TypeFieldEnum), 
+},
+
+    openHours: {
+      type: String,
+    },
+
+    pricePerHour: {
+      type: Number,
+      min: 0,
+    },
+
   },
   { timestamps: true },
 );

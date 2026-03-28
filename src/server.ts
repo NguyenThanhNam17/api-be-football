@@ -1,6 +1,11 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import app from "./app";
+import express from "express";
+import path from "path";
+
+
+
 
 dotenv.config();
 
@@ -16,8 +21,9 @@ async function connectMongoDB() {
 }
 
 connectMongoDB();
-
+app.use("/uploads", express.static("uploads"));
 app.locals.isMongoConnected = () => isMongoConnected;
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
