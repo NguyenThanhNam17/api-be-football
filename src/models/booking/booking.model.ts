@@ -7,10 +7,10 @@ import {
 } from "../../constants/model.const";
 
 export type IBooking = BaseDocument & {
-  userId:  Types.ObjectId;
-  fieldId:  Types.ObjectId;
-  subFieldId:  Types.ObjectId;
-  timeSlotId:  Types.ObjectId;
+  userId: Types.ObjectId;
+  fieldId: Types.ObjectId;
+  subFieldId: Types.ObjectId;
+  timeSlotId: Types.ObjectId;
   date: Date;
   phone: string;
   note?: string;
@@ -20,6 +20,7 @@ export type IBooking = BaseDocument & {
   status: string;
   depositStatus?: string;
   depositMethod?: string;
+  expiredAt?: Date;
   isDeleted?: boolean;
 };
 
@@ -106,13 +107,22 @@ const bookingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    expiredAt: {
+      type: Date,
+    },
   },
   { timestamps: true },
 );
 
 bookingSchema.index(
   { subFieldId: 1, date: 1, timeSlotId: 1 },
-  { unique: true },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isDeleted: false,
+      status: { $in: ["PENDING", "CONFIRMED"] },
+    },
+  }
 );
 
 const BookingModel = mongoose.model<IBooking>("Booking", bookingSchema);

@@ -35,6 +35,7 @@ class BookingRoute extends BaseRoute {
       [this.authentication],
       this.route(this.getMyBookings),
     );
+    this.router.get("/getBookedSlots", this.route(this.getBookedSlots));
     this.router.get(
       "/cancelBooking/:id",
       [this.authentication],
@@ -100,7 +101,8 @@ class BookingRoute extends BaseRoute {
     }
 
     let timeSlot = await TimeSlotModel.findOne({
-      _id: timeSlotId    });
+      _id: timeSlotId,
+    });
 
     if (!timeSlot) {
       throw ErrorHelper.forbidden("Thời gian không tồn tại");
@@ -113,15 +115,19 @@ class BookingRoute extends BaseRoute {
       timeSlotId,
       date: bookingDate,
       isDeleted: false,
+      status: { $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED] },
+      expiredAt: { $gt: new Date() },
     });
 
     if (existed) {
-      throw ErrorHelper.forbidden("booking đã tồn tại");
+      throw ErrorHelper.requestDataInvalid("Slot đang được giữ hoặc đã đặt");
     }
 
     const totalPrice = subField.pricePerHour;
     const depositAmount = totalPrice * 0.3;
     const remainingAmount = totalPrice - depositAmount;
+    const now = new Date();
+    const expiredAt = new Date(now.getTime() + 5 * 60 * 1000);
 
     try {
       const booking = new BookingModel({
@@ -137,6 +143,7 @@ class BookingRoute extends BaseRoute {
         remainingAmount,
         status: BookingStatusEnum.PENDING,
         depositStatus: DepositStatusEnum.UNPAID,
+        expiredAt,
       });
 
       await booking.save();
@@ -236,40 +243,67 @@ class BookingRoute extends BaseRoute {
     });
   }
 
-  async updateStatus(req: Request, res: Response) {
-    const { id } = req.params;
-    const { status } = req.body;
+ async updateStatus(req: Request, res: Response) {
+  const { id } = req.params;
+  const { status } = req.body;
 
-    if (!id || !status) {
-      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
-    }
-
-    const booking = await BookingModel.findOne({
-      _id: id,
-      isDeleted: false,
-    });
-
-    if (!booking) {
-      throw ErrorHelper.forbidden("Không tìm thấy booking");
-    }
-
-    if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
-      throw ErrorHelper.permissionDeny();
-    }
-
-    if (!Object.values(BookingStatusEnum).includes(status)) {
-      throw ErrorHelper.requestDataInvalid("Status không hợp lệ");
-    }
-
-    await booking.save();
-
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: { booking },
-    });
+  if (!id || !status) {
+    throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
   }
+
+  const booking = await BookingModel.findOne({
+    _id: id,
+    isDeleted: false,
+  });
+
+  if (!booking) {
+    throw ErrorHelper.forbidden("Không tìm thấy booking");
+  }
+
+  if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
+    throw ErrorHelper.permissionDeny();
+  }
+
+  if (!Object.values(BookingStatusEnum).includes(status)) {
+    throw ErrorHelper.requestDataInvalid("Status không hợp lệ");
+  }
+
+  booking.status = status;
+
+  if (status === BookingStatusEnum.CONFIRMED) {
+    booking.expiredAt = undefined;
+    booking.depositStatus = DepositStatusEnum.PAID;
+  }
+
+  await booking.save();
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: { booking },
+  });
+}
+
+  async getBookedSlots(req: Request, res: Response) {
+  const { subFieldId, date } = req.query;
+
+  const bookingDate = new Date(date as string);
+
+  const bookings = await BookingModel.find({
+    subFieldId,
+    date: bookingDate,
+    isDeleted: false,
+    status: { $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED] },
+    expiredAt: { $gt: new Date() },
+  });
+
+  const bookedTimeSlotIds = bookings.map(b => b.timeSlotId);
+
+  return res.json({
+    data: bookedTimeSlotIds,
+  });
+}
 }
 
 export default new BookingRoute().router;

@@ -2,6 +2,8 @@ import express from "express";
 import router from "./routers";
 import cors from "cors";
 import path from "path";
+import cron from "node-cron";
+import { autoCancelBooking } from "./jobs/booking.job";
 
 
 const app = express();
@@ -13,6 +15,11 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
   }),
 );
+
+
+cron.schedule("* * * * *", async () => {
+  await autoCancelBooking();
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
