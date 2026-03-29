@@ -1,72 +1,57 @@
 import mongoose from "mongoose";
-import { TimeSlotModel } from "../models/TimeSlot/timeSlot.model";
 import dotenv from "dotenv";
+import path from "path";
+import { TimeSlotModel } from "../models/TimeSlot/timeSlot.model";
 
-
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const mongoURI = process.env.MONGO_URI || "";
 
-const generateTimeSlots = () => {
+async function seedTimeSlot() {
+  await mongoose.connect(mongoURI);
+  console.log("Connected MongoDB");
+
+  // ❌ tránh seed trùng
+  const existed = await TimeSlotModel.countDocuments();
+  if (existed > 0) {
+    console.log("Đã có dữ liệu, không seed lại");
+    process.exit();
+  }
+
   const slots = [];
 
-  let startHour = 6;
-  let startMinute = 0;
+  for (let i = 0; i < 24 * 60; i += 30) {
+    const startHour = Math.floor(i / 60);
+    const startMinute = i % 60;
 
-  const endHour = 23;
+    const endTotal = i + 30;
+    let endHour = Math.floor(endTotal / 60);
+    let endMinute = endTotal % 60;
 
-  while (startHour < endHour) {
-    const start = `${String(startHour).padStart(2, "0")}:${String(
-      startMinute,
-    ).padStart(2, "0")}`;
-
-    let endMinute = startMinute + 30;
-    let endHourTemp = startHour;
-
-    if (endMinute >= 60) {
-      endMinute = 0;
-      endHourTemp += 1;
+    // convert 24:00 -> 00:00
+    if (endHour === 24) {
+      endHour = 0;
     }
 
-    const end = `${String(endHourTemp).padStart(2, "0")}:${String(
-      endMinute,
-    ).padStart(2, "0")}`;
+    const start = `${startHour.toString().padStart(2, "0")}:${startMinute
+      .toString()
+      .padStart(2, "0")}`;
+
+    const end = `${endHour.toString().padStart(2, "0")}:${endMinute
+      .toString()
+      .padStart(2, "0")}`;
 
     slots.push({
       startTime: start,
       endTime: end,
     });
-
-    startMinute += 30;
-
-    if (startMinute >= 60) {
-      startMinute = 0;
-      startHour += 1;
-    }
   }
 
-  return slots;
-};
+  await TimeSlotModel.insertMany(slots);
 
-const seedTimeSlots = async () => {
-  try {
-    await mongoose.connect(mongoURI);
+  console.log("Seed time slots 24h (30 phút) thành công");
 
-    console.log("Connected MongoDB");
+  process.exit();
+}
 
-    await TimeSlotModel.deleteMany({});
-
-    const slots = generateTimeSlots();
-
-    await TimeSlotModel.insertMany(slots);
-
-    console.log("Seeded TimeSlots:", slots.length);
-
-    process.exit();
-  } catch (error) {
-    console.error(error);
-    process.exit(1);
-  }
-};
-
-seedTimeSlots();
+seedTimeSlot();

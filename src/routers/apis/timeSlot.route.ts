@@ -61,14 +61,27 @@ class TimeSlotRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
+
     let { startTime, endTime } = req.body;
+
     if (!startTime || !endTime) {
       throw ErrorHelper.requestDataInvalid("Thiếu startTime hoặc endTime");
     }
 
-    const label = `${startTime} - ${endTime}`;
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
-    let existed = await TimeSlotModel.findOne({
+    if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+      throw ErrorHelper.requestDataInvalid("Time phải đúng format HH:mm");
+    }
+
+    const startNum = Number(startTime.replace(":", ""));
+    const endNum = Number(endTime.replace(":", ""));
+
+    if (startNum >= endNum) {
+      throw ErrorHelper.requestDataInvalid("endTime phải lớn hơn startTime");
+    }
+
+    const existed = await TimeSlotModel.findOne({
       startTime,
       endTime,
       isDeleted: false,
@@ -81,16 +94,13 @@ class TimeSlotRoute extends BaseRoute {
     const timeSlot = await TimeSlotModel.create({
       startTime,
       endTime,
-      label,
     });
 
     return res.status(200).json({
       status: 200,
       code: "200",
       message: "success",
-      data: {
-        timeSlot,
-      },
+      data: { timeSlot },
     });
   }
 
@@ -156,11 +166,21 @@ class TimeSlotRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
+
     const id = req.params.id as string;
     let { startTime, endTime } = req.body;
 
     if (!id || !Types.ObjectId.isValid(id)) {
       throw ErrorHelper.requestDataInvalid("Id không hợp lệ");
+    }
+
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (
+      (startTime && !timeRegex.test(startTime)) ||
+      (endTime && !timeRegex.test(endTime))
+    ) {
+      throw ErrorHelper.requestDataInvalid("Time phải đúng format HH:mm");
     }
 
     const timeSlot = await TimeSlotModel.findOne({
@@ -172,28 +192,31 @@ class TimeSlotRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("TimeSlot không tồn tại");
     }
 
-    // 2. nếu có thay đổi → check trùng
-    if (startTime || endTime) {
-      const newStart = startTime || timeSlot.startTime;
-      const newEnd = endTime || timeSlot.endTime;
+    const newStart = startTime || timeSlot.startTime;
+    const newEnd = endTime || timeSlot.endTime;
 
-      const existed = await TimeSlotModel.findOne({
-        startTime: newStart,
-        endTime: newEnd,
-        _id: { $ne: new Types.ObjectId(id) },
-        isDeleted: false,
-      });
+    const startNum = Number(newStart.replace(":", ""));
+    const endNum = Number(newEnd.replace(":", ""));
 
-      if (existed) {
-        throw ErrorHelper.requestDataInvalid("TimeSlot bị trùng");
-      }
-
-      timeSlot.startTime = newStart;
-      timeSlot.endTime = newEnd;
-      timeSlot.label = `${newStart} - ${newEnd}`;
+    if (startNum >= endNum) {
+      throw ErrorHelper.requestDataInvalid("endTime phải lớn hơn startTime");
     }
 
-    await timeSlot.save();
+    const existed = await TimeSlotModel.findOne({
+      startTime: newStart,
+      endTime: newEnd,
+      _id: { $ne: new Types.ObjectId(id) },
+      isDeleted: false,
+    });
+
+    if (existed) {
+      throw ErrorHelper.requestDataInvalid("TimeSlot bị trùng");
+    }
+
+    timeSlot.startTime = newStart;
+    timeSlot.endTime = newEnd;
+
+    await timeSlot.save(); // label auto update
 
     return res.status(200).json({
       status: 200,
