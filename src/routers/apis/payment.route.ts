@@ -123,6 +123,7 @@ class PaymentRoute extends BaseRoute {
 
     booking.depositStatus = DepositStatusEnum.PAID;
     booking.status = BookingStatusEnum.CONFIRMED;
+    booking.expiredAt = undefined;
 
     await booking.save();
 
@@ -160,7 +161,9 @@ class PaymentRoute extends BaseRoute {
 
     return res.json({
       status: 200,
-      data: payments,
+      code: "200",
+      message: "success",
+      data: { payments },
     });
   }
 

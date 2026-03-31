@@ -115,8 +115,15 @@ class BookingRoute extends BaseRoute {
       timeSlotId,
       date: bookingDate,
       isDeleted: false,
-      status: { $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED] },
-      expiredAt: { $gt: new Date() },
+      $or: [
+        {
+          status: BookingStatusEnum.CONFIRMED,
+        },
+        {
+          status: BookingStatusEnum.PENDING,
+          expiredAt: { $gt: new Date() },
+        },
+      ],
     });
 
     if (existed) {
@@ -243,67 +250,92 @@ class BookingRoute extends BaseRoute {
     });
   }
 
- async updateStatus(req: Request, res: Response) {
-  const { id } = req.params;
-  const { status } = req.body;
+  async updateStatus(req: Request, res: Response) {
+    const { id } = req.params;
+    const { status } = req.body;
 
-  if (!id || !status) {
-    throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
+    if (!id || !status) {
+      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
+    }
+
+    const booking = await BookingModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!booking) {
+      throw ErrorHelper.forbidden("Không tìm thấy booking");
+    }
+
+    if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    if (!Object.values(BookingStatusEnum).includes(status)) {
+      throw ErrorHelper.requestDataInvalid("Status không hợp lệ");
+    }
+
+    booking.status = status;
+
+    if (status === BookingStatusEnum.CONFIRMED) {
+      booking.expiredAt = undefined;
+      booking.depositStatus = DepositStatusEnum.PAID;
+    }
+
+    await booking.save();
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { booking },
+    });
   }
-
-  const booking = await BookingModel.findOne({
-    _id: id,
-    isDeleted: false,
-  });
-
-  if (!booking) {
-    throw ErrorHelper.forbidden("Không tìm thấy booking");
-  }
-
-  if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
-    throw ErrorHelper.permissionDeny();
-  }
-
-  if (!Object.values(BookingStatusEnum).includes(status)) {
-    throw ErrorHelper.requestDataInvalid("Status không hợp lệ");
-  }
-
-  booking.status = status;
-
-  if (status === BookingStatusEnum.CONFIRMED) {
-    booking.expiredAt = undefined;
-    booking.depositStatus = DepositStatusEnum.PAID;
-  }
-
-  await booking.save();
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data: { booking },
-  });
-}
 
   async getBookedSlots(req: Request, res: Response) {
-  const { subFieldId, date } = req.query;
+    const { subFieldId, date } = req.query;
 
-  const bookingDate = new Date(date as string);
+    if (!subFieldId || !date) {
+      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
+    }
 
-  const bookings = await BookingModel.find({
-    subFieldId,
-    date: bookingDate,
-    isDeleted: false,
-    status: { $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED] },
-    expiredAt: { $gt: new Date() },
-  });
+    const bookingDate = new Date(date as string);
+    const now = new Date();
 
-  const bookedTimeSlotIds = bookings.map(b => b.timeSlotId);
+    // ✅ cleanup booking hết hạn trước (optional nhưng nên có)
+    await BookingModel.updateMany(
+      {
+        status: BookingStatusEnum.PENDING,
+        expiredAt: { $lt: now },
+      },
+      {
+        status: BookingStatusEnum.CANCELLED,
+      },
+    );
 
-  return res.json({
-    data: bookedTimeSlotIds,
-  });
-}
+    // ✅ query chuẩn
+    const bookings = await BookingModel.find({
+      subFieldId,
+      date: bookingDate,
+      isDeleted: false,
+      $or: [
+        {
+          status: BookingStatusEnum.CONFIRMED, // luôn giữ slot
+        },
+        {
+          status: BookingStatusEnum.PENDING,
+          expiredAt: { $gt: now }, // chỉ pending mới check expired
+        },
+      ],
+    });
+
+    const bookedTimeSlotIds = bookings.map((b) => b.timeSlotId);
+
+    return res.json({
+      status: 200,
+      data: bookedTimeSlotIds,
+    });
+  }
 }
 
 export default new BookingRoute().router;
