@@ -482,14 +482,6 @@ class BookingRoute extends BaseRoute {
     const now = new Date();
     const normalizedSubFieldId = String(subFieldId || "").trim();
 
-    await expireStalePendingBookings(
-      {
-        subFieldId: new Types.ObjectId(normalizedSubFieldId),
-        date: bookingDate,
-      },
-      now,
-    );
-
     const bookings = await BookingModel.find(
       buildActiveBookingFilter(
         {

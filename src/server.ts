@@ -1,11 +1,6 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import app from "./app";
-import express from "express";
-import path from "path";
-
-
-
 
 dotenv.config();
 
@@ -20,11 +15,35 @@ async function connectMongoDB() {
   isMongoConnected = true;
 }
 
-connectMongoDB();
-app.use("/uploads", express.static("uploads"));
 app.locals.isMongoConnected = () => isMongoConnected;
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+mongoose.connection.on("disconnected", () => {
+  isMongoConnected = false;
+  console.warn("MongoDB disconnected");
+});
 
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+mongoose.connection.on("connected", () => {
+  isMongoConnected = true;
+});
+
+mongoose.connection.on("error", (error) => {
+  isMongoConnected = false;
+  console.error("MongoDB connection error", error);
+});
+
+async function startServer() {
+  if (!mongoURI) {
+    throw new Error("MONGO_URI is required");
+  }
+
+  await connectMongoDB();
+
+  app.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((error) => {
+  isMongoConnected = false;
+  console.error("Failed to start server", error);
+  process.exit(1);
 });
