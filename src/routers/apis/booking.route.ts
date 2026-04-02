@@ -13,10 +13,152 @@ import { Types } from "mongoose";
 import { SubFieldModel } from "../../models/subField/subField.model";
 import { TimeSlotModel } from "../../models/TimeSlot/timeSlot.model";
 import { BookingModel } from "../../models/booking/booking.model";
+import { PaymentModel } from "../../models/Payment/payment.model";
 import {
   BookingStatusEnum,
   DepositStatusEnum,
 } from "../../constants/model.const";
+import {
+  buildActiveBookingFilter,
+  expireStalePendingBookings,
+  getBookingHoldExpiresAt,
+} from "../../helper/bookingHold.helper";
+
+const toObjectId = (value: any) => {
+  const normalizedValue =
+    value && typeof value === "object" && value._id ? value._id : value;
+
+  if (!normalizedValue || !Types.ObjectId.isValid(normalizedValue)) {
+    return null;
+  }
+
+  return new Types.ObjectId(normalizedValue);
+};
+
+const getTimeSlotLabel = (timeSlot: any) => {
+  const startTime = String(timeSlot?.startTime || "").trim();
+  const endTime = String(timeSlot?.endTime || "").trim();
+
+  if (startTime && endTime) {
+    return `${startTime} - ${endTime}`;
+  }
+
+  return String(timeSlot?.label || "").trim();
+};
+
+const buildCustomerInfo = (booking: any) => {
+  const user = booking?.userId && typeof booking.userId === "object" ? booking.userId : null;
+
+  return {
+    id: String(user?._id || booking?.userId || "").trim(),
+    fullName: String(user?.name || "").trim() || "Khách hàng",
+    email: String(user?.email || "").trim(),
+    phone: String(booking?.phone || user?.phone || "").trim(),
+  };
+};
+
+const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, any>) => {
+  const rawBooking =
+    booking && typeof booking.toObject === "function" ? booking.toObject() : booking;
+  const field = rawBooking?.fieldId && typeof rawBooking.fieldId === "object" ? rawBooking.fieldId : null;
+  const subField =
+    rawBooking?.subFieldId && typeof rawBooking.subFieldId === "object"
+      ? rawBooking.subFieldId
+      : null;
+  const timeSlot =
+    rawBooking?.timeSlotId && typeof rawBooking.timeSlotId === "object"
+      ? rawBooking.timeSlotId
+      : null;
+  const latestPayment = latestPaymentsByBookingId.get(String(rawBooking?._id || "")) || null;
+  const timeSlotLabel = getTimeSlotLabel(timeSlot);
+  const holdExpiresAt =
+    rawBooking?.expiredAt || getBookingHoldExpiresAt(rawBooking).toISOString();
+
+  return {
+    ...rawBooking,
+    id: rawBooking?._id,
+    bookingId: rawBooking?._id,
+    userId: rawBooking?.userId?._id || rawBooking?.userId,
+    fieldId: field?._id || rawBooking?.fieldId,
+    subFieldId: subField?._id || rawBooking?.subFieldId,
+    timeSlotId: timeSlot?._id || rawBooking?.timeSlotId,
+    field: field
+      ? {
+          _id: field._id,
+          id: field._id,
+          name: field.name,
+          address: field.address,
+        }
+      : undefined,
+    subField: subField
+      ? {
+          _id: subField._id,
+          id: subField._id,
+          name: subField.name,
+          type: subField.type,
+        }
+      : undefined,
+    fieldName: String(field?.name || "").trim(),
+    fieldAddress: String(field?.address || "").trim(),
+    subFieldName: String(subField?.name || "").trim(),
+    subFieldType: String(subField?.type || "").trim(),
+    timeSlot: timeSlotLabel,
+    timeSlotLabel,
+    timeSlotInfo: timeSlot
+      ? {
+          _id: timeSlot._id,
+          id: timeSlot._id,
+          startTime: timeSlot.startTime,
+          endTime: timeSlot.endTime,
+          label: timeSlotLabel,
+          timeSlot: timeSlotLabel,
+        }
+      : undefined,
+    customer: buildCustomerInfo(rawBooking),
+    paymentId: latestPayment?._id,
+    paymentStatus: String(latestPayment?.status || "").trim(),
+    holdExpiresAt,
+    expiredAt: holdExpiresAt,
+  };
+};
+
+const getLatestPaymentsByBookingIds = async (bookingIds: Types.ObjectId[] = []) => {
+  if (!bookingIds.length) {
+    return new Map<string, any>();
+  }
+
+  const payments = await PaymentModel.find({
+    bookingId: { $in: bookingIds },
+    isDeleted: false,
+  }).sort({ createdAt: -1 });
+
+  const latestPaymentsByBookingId = new Map<string, any>();
+
+  payments.forEach((payment) => {
+    const bookingId = String(payment?.bookingId || "").trim();
+    if (bookingId && !latestPaymentsByBookingId.has(bookingId)) {
+      latestPaymentsByBookingId.set(bookingId, payment);
+    }
+  });
+
+  return latestPaymentsByBookingId;
+};
+
+const canOwnerManageBooking = async (ownerId: string, booking: any) => {
+  const ownerObjectId = toObjectId(ownerId);
+  const fieldId = toObjectId(booking?.fieldId);
+  if (!ownerObjectId || !fieldId) {
+    return false;
+  }
+
+  const field = await FieldModel.findOne({
+    _id: fieldId,
+    ownerUserId: ownerObjectId,
+    isDeleted: false,
+  } as any).select("_id");
+
+  return Boolean(field);
+};
 
 class BookingRoute extends BaseRoute {
   constructor() {
@@ -110,21 +252,27 @@ class BookingRoute extends BaseRoute {
 
     const bookingDate = new Date(date);
 
-    const existed = await BookingModel.findOne({
-      subFieldId,
-      timeSlotId,
-      date: bookingDate,
-      isDeleted: false,
-      $or: [
+    const now = new Date();
+
+    await expireStalePendingBookings(
+      {
+        subFieldId: new Types.ObjectId(subFieldId),
+        timeSlotId: new Types.ObjectId(timeSlotId),
+        date: bookingDate,
+      },
+      now,
+    );
+
+    const existed = await BookingModel.findOne(
+      buildActiveBookingFilter(
         {
-          status: BookingStatusEnum.CONFIRMED,
+          subFieldId: new Types.ObjectId(subFieldId),
+          timeSlotId: new Types.ObjectId(timeSlotId),
+          date: bookingDate,
         },
-        {
-          status: BookingStatusEnum.PENDING,
-          expiredAt: { $gt: new Date() },
-        },
-      ],
-    });
+        now,
+      ),
+    );
 
     if (existed) {
       throw ErrorHelper.requestDataInvalid("Slot đang được giữ hoặc đã đặt");
@@ -133,7 +281,6 @@ class BookingRoute extends BaseRoute {
     const totalPrice = subField.pricePerHour;
     const depositAmount = totalPrice * 0.3;
     const remainingAmount = totalPrice - depositAmount;
-    const now = new Date();
     const expiredAt = new Date(now.getTime() + 5 * 60 * 1000);
 
     try {
@@ -198,20 +345,45 @@ class BookingRoute extends BaseRoute {
   }
 
   async getMyBookings(req: Request, res: Response) {
-    const bookings = await BookingModel.find({
-      userId: new Types.ObjectId(req.tokenInfo._id),
+    let query: any = {
       isDeleted: false,
-    })
-      .populate("fieldId", "name address")
+    };
+
+    if (req.tokenInfo.role_ === ROLES.OWNER) {
+      const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
+      const ownedFieldIds = await FieldModel.find({
+        ownerUserId: ownerObjectId,
+        isDeleted: false,
+      } as any).distinct("_id");
+
+      query.fieldId = {
+        $in: ownedFieldIds,
+      };
+    } else if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      query.userId = new Types.ObjectId(req.tokenInfo._id);
+    }
+
+    const bookings = await BookingModel.find(query)
+      .populate("fieldId", "name address ownerUserId")
       .populate("subFieldId", "name type")
-      .populate("timeSlotId", "startTime endTime")
+      .populate("timeSlotId", "startTime endTime label")
+      .populate("userId", "name email phone")
       .sort({ createdAt: -1 });
+    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
+      bookings
+        .map((booking) => toObjectId(booking?._id))
+        .filter((bookingId): bookingId is Types.ObjectId => Boolean(bookingId)),
+    );
 
     return res.status(200).json({
       status: 200,
       code: "200",
       message: "success",
-      data: { bookings },
+      data: {
+        bookings: bookings.map((booking) =>
+          serializeBooking(booking, latestPaymentsByBookingId),
+        ),
+      },
     });
   }
 
@@ -271,6 +443,13 @@ class BookingRoute extends BaseRoute {
       throw ErrorHelper.permissionDeny();
     }
 
+    if (
+      req.tokenInfo.role_ === ROLES.OWNER &&
+      !(await canOwnerManageBooking(req.tokenInfo._id, booking))
+    ) {
+      throw ErrorHelper.permissionDeny();
+    }
+
     if (!Object.values(BookingStatusEnum).includes(status)) {
       throw ErrorHelper.requestDataInvalid("Status không hợp lệ");
     }
@@ -301,39 +480,45 @@ class BookingRoute extends BaseRoute {
 
     const bookingDate = new Date(date as string);
     const now = new Date();
+    const normalizedSubFieldId = String(subFieldId || "").trim();
 
-    // ✅ cleanup booking hết hạn trước (optional nhưng nên có)
-    await BookingModel.updateMany(
+    await expireStalePendingBookings(
       {
-        status: BookingStatusEnum.PENDING,
-        expiredAt: { $lt: now },
+        subFieldId: new Types.ObjectId(normalizedSubFieldId),
+        date: bookingDate,
       },
-      {
-        status: BookingStatusEnum.CANCELLED,
-      },
+      now,
     );
 
-    // ✅ query chuẩn
-    const bookings = await BookingModel.find({
-      subFieldId,
-      date: bookingDate,
-      isDeleted: false,
-      $or: [
+    const bookings = await BookingModel.find(
+      buildActiveBookingFilter(
         {
-          status: BookingStatusEnum.CONFIRMED, // luôn giữ slot
+          subFieldId: new Types.ObjectId(normalizedSubFieldId),
+          date: bookingDate,
         },
-        {
-          status: BookingStatusEnum.PENDING,
-          expiredAt: { $gt: now }, // chỉ pending mới check expired
-        },
-      ],
-    });
+        now,
+      ),
+    ).populate("timeSlotId", "startTime endTime label");
 
-    const bookedTimeSlotIds = bookings.map((b) => b.timeSlotId);
+    const bookedTimeSlotIds = bookings
+      .map((booking) => {
+        const bookingObject =
+          booking && typeof booking.toObject === "function" ? booking.toObject() : booking;
+        const timeSlotId = bookingObject?.timeSlotId;
+        return String(timeSlotId?._id || timeSlotId || "").trim();
+      })
+      .filter(Boolean);
 
     return res.json({
       status: 200,
-      data: bookedTimeSlotIds,
+      code: "200",
+      message: "success",
+      data: {
+        bookedTimeSlotIds,
+        bookings: bookings.map((booking) =>
+          serializeBooking(booking, new Map<string, any>()),
+        ),
+      },
     });
   }
 }

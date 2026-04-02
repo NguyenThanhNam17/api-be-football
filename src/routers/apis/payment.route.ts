@@ -12,12 +12,55 @@ import { PaymentModel } from "../../models/Payment/payment.model";
 import { QRCodeModel } from "../../models/qr/qr.model";
 import { BookingModel } from "../../models/booking/booking.model";
 import { Types } from "mongoose";
+import { FieldModel } from "../../models/field/field.model";
 import {
   PaymentStatusEnum,
   PaymentMethodEnum,
   BookingStatusEnum,
   DepositStatusEnum,
 } from "../../constants/model.const";
+
+const resolveObjectId = (value: any) => {
+  const normalizedValue =
+    value && typeof value === "object" && value._id ? value._id : value;
+
+  if (!normalizedValue || !Types.ObjectId.isValid(normalizedValue)) {
+    return null;
+  }
+
+  return new Types.ObjectId(normalizedValue);
+};
+
+const canManageBookingPayment = async (tokenInfo: any, booking: any) => {
+  if (!booking) {
+    return false;
+  }
+
+  if (tokenInfo.role_ === ROLES.ADMIN) {
+    return true;
+  }
+
+  if (String(booking.userId || "") === String(tokenInfo._id || "")) {
+    return true;
+  }
+
+  if (tokenInfo.role_ !== ROLES.OWNER) {
+    return false;
+  }
+
+  const fieldId = resolveObjectId(booking.fieldId);
+  if (!fieldId) {
+    return false;
+  }
+
+  const field = await FieldModel.findOne({
+    _id: fieldId,
+    ownerUserId: tokenInfo._id,
+    isDeleted: false,
+  }).select("_id");
+
+  return Boolean(field);
+};
 
 class PaymentRoute extends BaseRoute {
   constructor() {
@@ -72,8 +115,33 @@ class PaymentRoute extends BaseRoute {
 
     if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
 
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
+      throw ErrorHelper.permissionDeny();
+    }
+
     if (booking.depositStatus === DepositStatusEnum.PAID) {
       throw ErrorHelper.forbidden("Đã thanh toán rồi");
+    }
+
+    const existingPendingPayment = await PaymentModel.findOne({
+      bookingId: booking._id,
+      isDeleted: false,
+      status: PaymentStatusEnum.PENDING,
+    }).sort({ createdAt: -1 });
+
+    if (existingPendingPayment) {
+      const existingQr = await QRCodeModel.findOne({
+        paymentId: existingPendingPayment._id,
+      }).sort({ createdAt: -1 });
+
+      return res.json({
+        status: 200,
+        message: "Payment đang chờ xử lý",
+        data: {
+          payment: existingPendingPayment,
+          qr: existingQr || null,
+        },
+      });
     }
 
     const payment = new PaymentModel({
@@ -114,12 +182,16 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.forbidden("Đã thanh toán rồi");
     }
 
-    payment.status = PaymentStatusEnum.PAID;
-    await payment.save();
-
     const booking = await BookingModel.findById(payment.bookingId);
 
     if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
+
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    payment.status = PaymentStatusEnum.PAID;
+    await payment.save();
 
     booking.depositStatus = DepositStatusEnum.PAID;
     booking.status = BookingStatusEnum.CONFIRMED;
@@ -154,6 +226,19 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("bookingId không hợp lệ");
     }
 
+    const booking = await BookingModel.findOne({
+      _id: bookingId,
+      isDeleted: false,
+    });
+
+    if (!booking) {
+      throw ErrorHelper.forbidden("Booking không tồn tại");
+    }
+
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
+      throw ErrorHelper.permissionDeny();
+    }
+
     const payments = await PaymentModel.find({
       bookingId: bookingId,
       isDeleted: false,
@@ -173,6 +258,13 @@ class PaymentRoute extends BaseRoute {
     const payment = await PaymentModel.findById(id);
 
     if (!payment) throw ErrorHelper.forbidden("Không tìm thấy payment");
+
+    const booking = await BookingModel.findById(payment.bookingId);
+    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
+
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
+      throw ErrorHelper.permissionDeny();
+    }
 
     if (payment.status === PaymentStatusEnum.PAID) {
       throw ErrorHelper.forbidden("Không thể huỷ payment đã thanh toán");
@@ -194,8 +286,18 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("paymentId không hợp lệ");
     }
 
+    const payment = await PaymentModel.findById(paymentId);
+    if (!payment) throw ErrorHelper.forbidden("Payment không tồn tại");
+
+    const booking = await BookingModel.findById(payment.bookingId);
+    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
+
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
+      throw ErrorHelper.permissionDeny();
+    }
+
     const qr = await QRCodeModel.findOne({
-      paymentId:paymentId,
+      paymentId: paymentId,
     });
 
     if (!qr) throw ErrorHelper.forbidden("QR không tồn tại");
