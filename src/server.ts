@@ -1,8 +1,14 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import app from "./app";
+import path from "path";
 
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config();
+
+// Load app after env is initialized so helpers that read process.env at module load
+// time (for example SMTP config) get correct values.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const app = require("./app").default;
 
 const mongoURI = process.env.MONGO_URI || "";
 const PORT = process.env.PORT || 5555;
