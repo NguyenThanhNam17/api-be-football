@@ -10,6 +10,16 @@ import passwordHash from "password-hash";
 import { TokenHelper } from "../../helper/token.helper";
 import { UserHelper } from "../../models/user/user.helper";
 import { ROLES } from "../../constants/role.const";
+import {
+  invalidateOtpCode,
+  issueOtpCode,
+  verifyOtpCode,
+} from "../../helper/otp.helper";
+import {
+  getSmtpMissingConfigMessage,
+  isSmtpConfigured,
+  sendOtpEmail,
+} from "../../helper/mail.helper";
 
 class UserRoute extends BaseRoute {
   constructor() {
@@ -17,6 +27,8 @@ class UserRoute extends BaseRoute {
   }
 
   customRouting() {
+    this.router.post("/sendOtp", this.route(this.sendOtp));
+    this.router.post("/verifyOtp", this.route(this.verifyOtp));
     this.router.post("/login", this.route(this.login));
     this.router.post("/register", this.route(this.register));
     this.router.get("/getMe", [this.authentication], this.route(this.getMe));
@@ -77,6 +89,76 @@ class UserRoute extends BaseRoute {
       [this.authentication],
       this.route(this.downgradeOwner),
     );
+  }
+
+  async sendOtp(req: Request, res: Response) {
+    const { email, purpose } = req.body || {};
+
+    if (!email) {
+      throw ErrorHelper.requestDataInvalid("email required");
+    }
+
+    if (!isSmtpConfigured()) {
+      throw ErrorHelper.requestDataInvalid(getSmtpMissingConfigMessage());
+    }
+
+    const issuedOtp = await issueOtpCode({
+      email: String(email || ""),
+      purpose: String(purpose || "auth"),
+    });
+
+    try {
+      await sendOtpEmail({
+        to: issuedOtp.email,
+        otp: issuedOtp.otp,
+        purpose: issuedOtp.purpose,
+        expiresInMinutes: issuedOtp.expiresInMinutes,
+      });
+    } catch (_error) {
+      await invalidateOtpCode(issuedOtp.otpId);
+      throw ErrorHelper.somethingWentWrong("Can not send OTP email");
+    }
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        email: issuedOtp.email,
+        purpose: issuedOtp.purpose,
+        expiresAt: issuedOtp.expiresAt,
+        expiresInMinutes: issuedOtp.expiresInMinutes,
+      },
+    });
+  }
+
+  async verifyOtp(req: Request, res: Response) {
+    const { email, otp, purpose } = req.body || {};
+
+    if (!email || !otp) {
+      throw ErrorHelper.requestDataInvalid("email and otp required");
+    }
+
+    const verification = await verifyOtpCode({
+      email: String(email || ""),
+      otp: String(otp || ""),
+      purpose: String(purpose || "auth"),
+    });
+
+    if (!verification.isValid) {
+      throw ErrorHelper.requestDataInvalid(verification.message || "OTP invalid");
+    }
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        email: String(email || "").trim().toLowerCase(),
+        purpose: String(purpose || "auth").trim().toLowerCase(),
+        verified: true,
+      },
+    });
   }
 
   async authentication(req: Request, res: Response, next: NextFunction) {
