@@ -276,7 +276,7 @@ class UserRoute extends BaseRoute {
   }
 
   async getOneUser(req: Request, res: Response) {
-    const { userId } = req.body;
+    const userId = String(req.query.userId || req.body?.userId || "").trim();
     if (!userId) {
       throw ErrorHelper.requestDataInvalid("data invalid");
     }

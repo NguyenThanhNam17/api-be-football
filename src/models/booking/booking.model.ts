@@ -126,4 +126,49 @@ bookingSchema.index(
 );
 
 const BookingModel = mongoose.model<IBooking>("Booking", bookingSchema);
+
+const BOOKING_SLOT_UNIQUE_INDEX_NAME = "subFieldId_1_date_1_timeSlotId_1";
+
+const hasExpectedActiveSlotPartialFilter = (partialFilterExpression: any) => {
+  const statuses = partialFilterExpression?.status?.$in;
+
+  return (
+    partialFilterExpression?.isDeleted === false &&
+    Array.isArray(statuses) &&
+    statuses.length === 2 &&
+    statuses.includes(BookingStatusEnum.PENDING) &&
+    statuses.includes(BookingStatusEnum.CONFIRMED)
+  );
+};
+
+export const ensureBookingIndexes = async () => {
+  const collection = BookingModel.collection;
+  const existingIndexes = await collection.indexes();
+  const bookingSlotIndex = existingIndexes.find(
+    (index) => index?.name === BOOKING_SLOT_UNIQUE_INDEX_NAME,
+  );
+
+  if (bookingSlotIndex && hasExpectedActiveSlotPartialFilter(bookingSlotIndex.partialFilterExpression)) {
+    return;
+  }
+
+  if (bookingSlotIndex) {
+    await collection.dropIndex(BOOKING_SLOT_UNIQUE_INDEX_NAME);
+  }
+
+  await collection.createIndex(
+    { subFieldId: 1, date: 1, timeSlotId: 1 },
+    {
+      name: BOOKING_SLOT_UNIQUE_INDEX_NAME,
+      unique: true,
+      partialFilterExpression: {
+        isDeleted: false,
+        status: {
+          $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED],
+        },
+      },
+    },
+  );
+};
+
 export { BookingModel };

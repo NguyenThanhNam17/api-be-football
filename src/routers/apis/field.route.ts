@@ -62,7 +62,7 @@ class FieldRoute extends BaseRoute {
     );
     this.router.get(
       "/getAllField",
-      [this.authentication],
+      [this.authenticationOptional],
       this.route(this.getAllField),
     );
   }
@@ -88,16 +88,48 @@ class FieldRoute extends BaseRoute {
     }
   }
 
+  async authenticationOptional(
+    req: Request,
+    _res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const rawToken = String(req.get("x-token") || "").trim();
+
+      if (!rawToken) {
+        next();
+        return;
+      }
+
+      const tokenData: any = TokenHelper.decodeToken(rawToken);
+      if (![ROLES.ADMIN, ROLES.USER, ROLES.OWNER].includes(tokenData.role_)) {
+        next();
+        return;
+      }
+
+      const user = await UserModel.findById(tokenData._id);
+      if (!user) {
+        next();
+        return;
+      }
+
+      req.tokenInfo = tokenData;
+      next();
+    } catch (_err) {
+      next();
+    }
+  }
+
   async getAllField(req: Request, res: Response) {
-    const role = req.tokenInfo.role_;
-    const userId = req.tokenInfo._id;
+    const role = req.tokenInfo?.role_;
+    const userId = req.tokenInfo?._id;
 
     let query: any = {
       isDeleted: false,
     };
 
     if (role === ROLES.ADMIN) {
-    } else if (role === ROLES.OWNER) {
+    } else if (role === ROLES.OWNER && userId) {
       query.ownerUserId = userId;
     } else {
       query.status = FieldStatusEnum.APPROVED;

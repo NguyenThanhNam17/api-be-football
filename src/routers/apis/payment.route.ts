@@ -18,7 +18,9 @@ import {
   PaymentMethodEnum,
   BookingStatusEnum,
   DepositStatusEnum,
+  DepositMethodEnum,
 } from "../../constants/model.const";
+import { expireStalePendingBookings } from "../../helper/bookingHold.helper";
 
 const resolveObjectId = (value: any) => {
   const normalizedValue =
@@ -62,6 +64,23 @@ const canManageBookingPayment = async (tokenInfo: any, booking: any) => {
   return Boolean(field);
 };
 
+const normalizePaymentType = (value: any) => {
+  const normalizedValue = String(value || "DEPOSIT").trim().toUpperCase();
+  return normalizedValue === "FULL" ? "FULL" : "DEPOSIT";
+};
+
+const mapPaymentMethodToDepositMethod = (method: PaymentMethodEnum) => {
+  switch (method) {
+    case PaymentMethodEnum.MOMO:
+      return DepositMethodEnum.MOMO;
+    case PaymentMethodEnum.BANK:
+      return DepositMethodEnum.BANK_TRANSFER;
+    case PaymentMethodEnum.CASH:
+    default:
+      return DepositMethodEnum.CASH;
+  }
+};
+
 class PaymentRoute extends BaseRoute {
   constructor() {
     super();
@@ -98,7 +117,7 @@ class PaymentRoute extends BaseRoute {
   }
 
   async createPayment(req: Request, res: Response) {
-    const { bookingId, method } = req.body;
+    const { bookingId, method, paymentType } = req.body;
 
     if (!bookingId || !method) {
       throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
@@ -108,7 +127,7 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("bookingId không hợp lệ");
     }
 
-    const booking = await BookingModel.findOne({
+    let booking = await BookingModel.findOne({
       _id: bookingId,
       isDeleted: false,
     });
@@ -119,9 +138,28 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.permissionDeny();
     }
 
+    await expireStalePendingBookings({ _id: booking._id }, new Date());
+
+    booking = await BookingModel.findOne({
+      _id: booking._id,
+      isDeleted: false,
+    });
+
+    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
+
+    if (booking.status === BookingStatusEnum.CANCELLED) {
+      throw ErrorHelper.forbidden("Booking đã hết thời gian giữ chỗ");
+    }
+
     if (booking.depositStatus === DepositStatusEnum.PAID) {
       throw ErrorHelper.forbidden("Đã thanh toán rồi");
     }
+
+    const normalizedPaymentType = normalizePaymentType(paymentType);
+    const paymentAmount =
+      normalizedPaymentType === "FULL"
+        ? Number(booking.totalPrice || 0)
+        : Number(booking.depositAmount || 0);
 
     const existingPendingPayment = await PaymentModel.findOne({
       bookingId: booking._id,
@@ -130,6 +168,10 @@ class PaymentRoute extends BaseRoute {
     }).sort({ createdAt: -1 });
 
     if (existingPendingPayment) {
+      if (Number(existingPendingPayment.amount || 0) !== paymentAmount) {
+        existingPendingPayment.status = PaymentStatusEnum.FAILED;
+        await existingPendingPayment.save();
+      } else {
       const existingQr = await QRCodeModel.findOne({
         paymentId: existingPendingPayment._id,
       }).sort({ createdAt: -1 });
@@ -142,12 +184,13 @@ class PaymentRoute extends BaseRoute {
           qr: existingQr || null,
         },
       });
+      }
     }
 
     const payment = new PaymentModel({
       bookingId: booking._id,
       userId: req.tokenInfo._id,
-      amount: booking.depositAmount,
+      amount: paymentAmount,
       method: method as PaymentMethodEnum,
       status: PaymentStatusEnum.PENDING,
     });
@@ -182,7 +225,7 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.forbidden("Đã thanh toán rồi");
     }
 
-    const booking = await BookingModel.findById(payment.bookingId);
+    let booking = await BookingModel.findById(payment.bookingId);
 
     if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
 
@@ -190,10 +233,28 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.permissionDeny();
     }
 
+    await expireStalePendingBookings({ _id: booking._id }, new Date());
+
+    booking = await BookingModel.findById(payment.bookingId);
+
+    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
+
+    if (booking.status === BookingStatusEnum.CANCELLED) {
+      payment.status = PaymentStatusEnum.FAILED;
+      await payment.save();
+      throw ErrorHelper.forbidden("Booking đã hết thời gian giữ chỗ");
+    }
+
     payment.status = PaymentStatusEnum.PAID;
     await payment.save();
 
+    const paidAmount = Number(payment.amount || 0);
+    const totalPrice = Number(booking.totalPrice || 0);
+    const remainingAmount = Math.max(totalPrice - paidAmount, 0);
+
     booking.depositStatus = DepositStatusEnum.PAID;
+    booking.depositMethod = mapPaymentMethodToDepositMethod(payment.method);
+    booking.remainingAmount = remainingAmount;
     booking.status = BookingStatusEnum.CONFIRMED;
     booking.expiredAt = undefined;
 
@@ -206,6 +267,13 @@ class PaymentRoute extends BaseRoute {
   }
 
   async getMyPayments(req: Request, res: Response) {
+    await expireStalePendingBookings(
+      {
+        userId: new Types.ObjectId(req.tokenInfo._id),
+      },
+      new Date(),
+    );
+
     const payments = await PaymentModel.find({
       userId: new Types.ObjectId(req.tokenInfo._id),
       isDeleted: false,
@@ -225,6 +293,13 @@ class PaymentRoute extends BaseRoute {
     if (!bookingId) {
       throw ErrorHelper.requestDataInvalid("bookingId không hợp lệ");
     }
+
+    await expireStalePendingBookings(
+      {
+        _id: bookingId,
+      },
+      new Date(),
+    );
 
     const booking = await BookingModel.findOne({
       _id: bookingId,

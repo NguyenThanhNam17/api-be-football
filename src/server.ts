@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import path from "path";
+import { ensureBookingIndexes } from "./models/booking/booking.model";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config();
@@ -17,6 +18,7 @@ let isMongoConnected = false;
 
 async function connectMongoDB() {
   await mongoose.connect(mongoURI);
+  await ensureBookingIndexes();
   console.log("Connected to MongoDB");
   isMongoConnected = true;
 }

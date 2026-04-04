@@ -47,8 +47,52 @@ const getTimeSlotLabel = (timeSlot: any) => {
   return String(timeSlot?.label || "").trim();
 };
 
+const timeStringToMinutes = (value: string) => {
+  const normalizedValue = String(value || "").trim();
+  const match = normalizedValue.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return Number(match[1]) * 60 + Number(match[2]);
+};
+
+const getTimeSlotDurationMinutes = (timeSlot: any) => {
+  const startMinutes = timeStringToMinutes(String(timeSlot?.startTime || ""));
+  const endMinutes = timeStringToMinutes(String(timeSlot?.endTime || ""));
+
+  if (
+    Number.isFinite(startMinutes) &&
+    Number.isFinite(endMinutes) &&
+    Number(endMinutes) > Number(startMinutes)
+  ) {
+    return Number(endMinutes) - Number(startMinutes);
+  }
+
+  return 60;
+};
+
 const buildCustomerInfo = (booking: any) => {
   const user = booking?.userId && typeof booking.userId === "object" ? booking.userId : null;
+  const field =
+    booking?.fieldId && typeof booking.fieldId === "object" ? booking.fieldId : null;
+  const bookingUserId = String(user?._id || booking?.userId || "").trim();
+  const ownerUserId = String(field?.ownerUserId?._id || field?.ownerUserId || "").trim();
+  const isManualOwnerBooking =
+    Boolean(bookingUserId) &&
+    Boolean(ownerUserId) &&
+    bookingUserId === ownerUserId;
+
+  if (isManualOwnerBooking) {
+    return {
+      id: "",
+      fullName: "Khách hàng",
+      email: "",
+      phone: String(booking?.phone || "").trim(),
+      createdAt: null,
+    };
+  }
 
   return {
     id: String(user?._id || booking?.userId || "").trim(),
@@ -72,9 +116,19 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
       ? rawBooking.timeSlotId
       : null;
   const latestPayment = latestPaymentsByBookingId.get(String(rawBooking?._id || "")) || null;
+  const latestPaymentAmount = Number(latestPayment?.amount || 0);
   const timeSlotLabel = getTimeSlotLabel(timeSlot);
   const holdExpiresAt =
     rawBooking?.expiredAt || getBookingHoldExpiresAt(rawBooking).toISOString();
+  const isDepositPaid =
+    String(rawBooking?.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID ||
+    String(latestPayment?.status || "").trim().toUpperCase() === PaymentStatusEnum.PAID;
+  const isFullyPaid =
+    isDepositPaid &&
+    (
+      Number(rawBooking?.remainingAmount || 0) <= 0 ||
+      latestPaymentAmount >= Number(rawBooking?.totalPrice || 0)
+    );
 
   return {
     ...rawBooking,
@@ -127,16 +181,15 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
     customer: buildCustomerInfo(rawBooking),
     paymentId: latestPayment?._id,
     paymentStatus: String(latestPayment?.status || "").trim(),
-    depositPaid:
-      String(rawBooking?.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID ||
-      String(latestPayment?.status || "").trim().toUpperCase() === PaymentStatusEnum.PAID,
-    fullyPaid: String(latestPayment?.status || "").trim().toUpperCase() === PaymentStatusEnum.PAID,
+    paidAmount: latestPaymentAmount,
+    depositPaid: isDepositPaid,
+    fullyPaid: isFullyPaid,
     depositPaidAt:
-      String(rawBooking?.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID
+      isDepositPaid
         ? latestPayment?.updatedAt || latestPayment?.createdAt || rawBooking?.updatedAt || null
         : null,
     fullyPaidAt:
-      String(latestPayment?.status || "").trim().toUpperCase() === PaymentStatusEnum.PAID
+      isFullyPaid
         ? latestPayment?.updatedAt || latestPayment?.createdAt || null
         : null,
     holdExpiresAt,
@@ -486,14 +539,17 @@ class BookingRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("Slot đang được giữ hoặc đã đặt");
     }
 
-    const totalPrice = subField.pricePerHour;
-    const depositAmount = totalPrice * 0.3;
+    const slotDurationMinutes = getTimeSlotDurationMinutes(timeSlot);
+    const totalPrice = Math.round(
+      (Number(subField.pricePerHour || 0) * slotDurationMinutes) / 60,
+    );
+    const depositAmount = Math.round(totalPrice * 0.4);
     const remainingAmount = totalPrice - depositAmount;
     const expiredAt = new Date(now.getTime() + 5 * 60 * 1000);
 
     try {
       const booking = new BookingModel({
-        userId: req.tokenInfo._id,
+        userId: req.tokenInfo?._id || null,
         fieldId: field._id,
         subFieldId,
         timeSlotId,
@@ -532,6 +588,13 @@ class BookingRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("Thiếu id booking");
     }
 
+    await expireStalePendingBookings(
+      {
+        _id: id,
+      },
+      new Date(),
+    );
+
     const booking = await BookingModel.findOne({
       _id: id,
       isDeleted: false,
@@ -565,19 +628,33 @@ class BookingRoute extends BaseRoute {
       isDeleted: false,
     };
 
-    if (req.tokenInfo.role_ === ROLES.OWNER) {
-      const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
-      const ownedFieldIds = await FieldModel.find({
-        ownerUserId: ownerObjectId,
-        isDeleted: false,
-      } as any).distinct("_id");
+    if (req.tokenInfo) {
+      if (req.tokenInfo.role_ === ROLES.OWNER) {
+        const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
+        const ownedFieldIds = await FieldModel.find({
+          ownerUserId: ownerObjectId,
+          isDeleted: false,
+        } as any).distinct("_id");
 
-      query.fieldId = {
-        $in: ownedFieldIds,
-      };
-    } else if (req.tokenInfo.role_ !== ROLES.ADMIN) {
-      query.userId = new Types.ObjectId(req.tokenInfo._id);
+        query.fieldId = {
+          $in: ownedFieldIds,
+        };
+      } else if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+        query.userId = new Types.ObjectId(req.tokenInfo._id);
+      }
+    } else {
+      // No token - return empty bookings
+      return res.status(200).json({
+        status: 200,
+        code: "200",
+        message: "success",
+        data: {
+          bookings: [],
+        },
+      });
     }
+
+    await expireStalePendingBookings(query, new Date());
 
     const bookings = await BookingModel.find(query)
       .populate("fieldId", "name address slug district ownerUserId openHours")
@@ -698,7 +775,9 @@ class BookingRoute extends BaseRoute {
     const recentBookings = serializedBookings.slice(0, recentLimit);
     const managedBookings = sortDashboardBookings(
       serializedBookings.filter(
-        (booking) => getBookingDateKey(booking) === availabilityDate,
+        (booking) =>
+          getBookingDateKey(booking) === availabilityDate &&
+          String(booking?.status || "").trim().toUpperCase() !== BookingStatusEnum.CANCELLED,
       ),
     ).slice(0, managedLimit);
     const blockingBookingsForDate = sortDashboardBookings(
@@ -1036,6 +1115,10 @@ class BookingRoute extends BaseRoute {
 
     if (booking.status === BookingStatusEnum.COMPLETED) {
       throw ErrorHelper.forbidden("Không thể huỷ booking đã hoàn thành");
+    }
+
+    if (String(booking.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID) {
+      throw ErrorHelper.forbidden("Chỉ có thể hủy booking chưa thanh toán");
     }
 
     booking.status = BookingStatusEnum.CANCELLED;

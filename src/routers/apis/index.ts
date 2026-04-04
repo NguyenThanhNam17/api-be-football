@@ -5,6 +5,7 @@ import subFieldRoute from './subField.route';
 import timeSlotRoute from './timeSlot.route';
 import bookingRoute from './booking.route';
 import paymentRoute from './payment.route';
+import contactRoute from './contact.route';
 
 const router = express.Router();
 
@@ -14,4 +15,5 @@ router.use('/subField', subFieldRoute);
 router.use('/timeSlot', timeSlotRoute);
 router.use('/booking', bookingRoute);
 router.use('/payment', paymentRoute);
+router.use('/contact', contactRoute);
 export default router;
