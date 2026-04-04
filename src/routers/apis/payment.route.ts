@@ -22,38 +22,27 @@ import {
 } from "../../constants/model.const";
 import { expireStalePendingBookings } from "../../helper/bookingHold.helper";
 
+// --- CẤU HÌNH NGÂN HÀNG CỦA BẠN ---
+const BANK_CONFIG = {
+  BANK_ID: "MB", // Ví dụ: MB, VCB, ICB (Vietinbank),...
+  ACCOUNT_NO: "0987654321", // Số tài khoản nhận tiền
+  ACCOUNT_NAME: "NGUYEN VAN A", // Tên chủ tài khoản (VIET HOA KHONG DAU)
+};
+
 const resolveObjectId = (value: any) => {
-  const normalizedValue =
-    value && typeof value === "object" && value._id ? value._id : value;
-
-  if (!normalizedValue || !Types.ObjectId.isValid(normalizedValue)) {
-    return null;
-  }
-
+  const normalizedValue = value && typeof value === "object" && value._id ? value._id : value;
+  if (!normalizedValue || !Types.ObjectId.isValid(normalizedValue)) return null;
   return new Types.ObjectId(normalizedValue);
 };
 
 const canManageBookingPayment = async (tokenInfo: any, booking: any) => {
-  if (!booking) {
-    return false;
-  }
-
-  if (tokenInfo.role_ === ROLES.ADMIN) {
-    return true;
-  }
-
-  if (String(booking.userId || "") === String(tokenInfo._id || "")) {
-    return true;
-  }
-
-  if (tokenInfo.role_ !== ROLES.OWNER) {
-    return false;
-  }
+  if (!booking) return false;
+  if (tokenInfo.role_ === ROLES.ADMIN) return true;
+  if (String(booking.userId || "") === String(tokenInfo._id || "")) return true;
+  if (tokenInfo.role_ !== ROLES.OWNER) return false;
 
   const fieldId = resolveObjectId(booking.fieldId);
-  if (!fieldId) {
-    return false;
-  }
+  if (!fieldId) return false;
 
   const field = await FieldModel.findOne({
     _id: fieldId,
@@ -71,13 +60,9 @@ const normalizePaymentType = (value: any) => {
 
 const mapPaymentMethodToDepositMethod = (method: PaymentMethodEnum) => {
   switch (method) {
-    case PaymentMethodEnum.MOMO:
-      return DepositMethodEnum.MOMO;
-    case PaymentMethodEnum.BANK:
-      return DepositMethodEnum.BANK_TRANSFER;
-    case PaymentMethodEnum.CASH:
-    default:
-      return DepositMethodEnum.CASH;
+    case PaymentMethodEnum.MOMO: return DepositMethodEnum.MOMO;
+    case PaymentMethodEnum.BANK: return DepositMethodEnum.BANK_TRANSFER;
+    default: return DepositMethodEnum.CASH;
   }
 };
 
@@ -99,16 +84,9 @@ class PaymentRoute extends BaseRoute {
     try {
       const token = req.get("x-token");
       if (!token) throw ErrorHelper.unauthorized();
-
       const tokenData: any = TokenHelper.decodeToken(token);
-
-      if (![ROLES.ADMIN, ROLES.USER, ROLES.OWNER].includes(tokenData.role_)) {
-        throw ErrorHelper.permissionDeny();
-      }
-
       const user = await UserModel.findById(tokenData._id);
       if (!user) throw ErrorHelper.unauthorized();
-
       req.tokenInfo = tokenData;
       next();
     } catch {
@@ -119,268 +97,130 @@ class PaymentRoute extends BaseRoute {
   async createPayment(req: Request, res: Response) {
     const { bookingId, method, paymentType } = req.body;
 
-    if (!bookingId || !method) {
-      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
-    }
+    if (!bookingId || !method) throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu bookingId hoặc phương thức");
 
-    if (!Types.ObjectId.isValid(bookingId)) {
-      throw ErrorHelper.requestDataInvalid("bookingId không hợp lệ");
-    }
+    let booking = await BookingModel.findOne({ _id: bookingId, isDeleted: false });
+    if (!booking) throw ErrorHelper.forbidden("Đơn đặt sân không tồn tại");
 
-    let booking = await BookingModel.findOne({
-      _id: bookingId,
-      isDeleted: false,
-    });
+    if (!(await canManageBookingPayment(req.tokenInfo, booking))) throw ErrorHelper.permissionDeny();
 
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
-      throw ErrorHelper.permissionDeny();
-    }
-
+    // Kiểm tra xem đơn đã bị hết hạn giữ chỗ chưa
     await expireStalePendingBookings({ _id: booking._id }, new Date());
+    booking = await BookingModel.findById(booking._id);
+    if (booking?.status === BookingStatusEnum.CANCELLED) throw ErrorHelper.forbidden("Đơn đặt sân đã bị hủy do hết thời gian chờ");
 
-    booking = await BookingModel.findOne({
-      _id: booking._id,
-      isDeleted: false,
+    const normalizedType = normalizePaymentType(paymentType);
+    
+    // TÍNH TOÁN SỐ TIỀN: Cọc 50% hoặc Trả hết 100%
+    const paymentAmount = normalizedType === "FULL" 
+        ? Number(booking.totalPrice) 
+        : (booking.depositAmount && booking.depositAmount > 0 ? booking.depositAmount : Number(booking.totalPrice) / 2);
+
+    // Xử lý nếu đã có yêu cầu thanh toán cũ đang treo
+    const existingPayment = await PaymentModel.findOne({
+      bookingId: booking._id,
+      status: PaymentStatusEnum.PENDING,
+      isDeleted: false
     });
 
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (booking.status === BookingStatusEnum.CANCELLED) {
-      throw ErrorHelper.forbidden("Booking đã hết thời gian giữ chỗ");
+    if (existingPayment) {
+        // Nếu số tiền khác (do khách đổi từ cọc sang trả đủ), hủy cái cũ
+        if (existingPayment.amount !== paymentAmount) {
+            existingPayment.status = PaymentStatusEnum.FAILED;
+            await existingPayment.save();
+        } else {
+            // Nếu giống tiền, trả về QR cũ luôn
+            const qr = await QRCodeModel.findOne({ paymentId: existingPayment._id });
+            return res.json({ status: 200, data: { payment: existingPayment, qr } });
+        }
     }
 
-    if (booking.depositStatus === DepositStatusEnum.PAID) {
-      throw ErrorHelper.forbidden("Đã thanh toán rồi");
-    }
-
-    const normalizedPaymentType = normalizePaymentType(paymentType);
-    const paymentAmount =
-      normalizedPaymentType === "FULL"
-        ? Number(booking.totalPrice || 0)
-        : Number(booking.depositAmount || 0);
-
-    const existingPendingPayment = await PaymentModel.findOne({
-      bookingId: booking._id,
-      isDeleted: false,
-      status: PaymentStatusEnum.PENDING,
-    }).sort({ createdAt: -1 });
-
-    if (existingPendingPayment) {
-      if (Number(existingPendingPayment.amount || 0) !== paymentAmount) {
-        existingPendingPayment.status = PaymentStatusEnum.FAILED;
-        await existingPendingPayment.save();
-      } else {
-      const existingQr = await QRCodeModel.findOne({
-        paymentId: existingPendingPayment._id,
-      }).sort({ createdAt: -1 });
-
-      return res.json({
-        status: 200,
-        message: "Payment đang chờ xử lý",
-        data: {
-          payment: existingPendingPayment,
-          qr: existingQr || null,
-        },
-      });
-      }
-    }
-
+    // 1. Tạo bản ghi Payment
     const payment = new PaymentModel({
       bookingId: booking._id,
       userId: req.tokenInfo._id,
       amount: paymentAmount,
-      method: method as PaymentMethodEnum,
+      method: method,
       status: PaymentStatusEnum.PENDING,
     });
-
     await payment.save();
+
+    // 2. Tạo nội dung chuyển khoản chuẩn
+    const description = `THANH TOAN ${booking._id.toString().slice(-6)}`.toUpperCase();
+
+    // 3. Tạo link QR VietQR thật
+    const qrUrl = `https://img.vietqr.io/image/${BANK_CONFIG.BANK_ID}-${BANK_CONFIG.ACCOUNT_NO}-compact2.png?amount=${paymentAmount}&addInfo=${encodeURIComponent(description)}&accountName=${encodeURIComponent(BANK_CONFIG.ACCOUNT_NAME)}`;
 
     const qr = new QRCodeModel({
       paymentId: payment._id,
-      qrImage: `https://fake-qr.com/${payment._id}`,
-      expiredAt: new Date(Date.now() + 15 * 60 * 1000),
+      qrImage: qrUrl,
+      expiredAt: new Date(Date.now() + 15 * 60 * 1000), // QR hiệu lực 15 phút
     });
-
     await qr.save();
 
     return res.json({
       status: 200,
-      message: "Tạo payment thành công",
-      data: { payment, qr },
+      message: "Khởi tạo thanh toán thành công",
+      data: { payment, qr, amount: paymentAmount, type: normalizedType }
     });
   }
 
   async confirmPayment(req: Request, res: Response) {
     const { paymentId } = req.body;
-
-    if (!paymentId) throw ErrorHelper.requestDataInvalid("Thiếu paymentId");
-
     const payment = await PaymentModel.findById(paymentId);
+    if (!payment || payment.status === PaymentStatusEnum.PAID) throw ErrorHelper.forbidden("Thanh toán không hợp lệ hoặc đã hoàn tất");
 
-    if (!payment) throw ErrorHelper.forbidden("Payment không tồn tại");
+    const booking = await BookingModel.findById(payment.bookingId);
+    if (!booking) throw ErrorHelper.forbidden("Đơn hàng không tồn tại");
 
-    if (payment.status === PaymentStatusEnum.PAID) {
-      throw ErrorHelper.forbidden("Đã thanh toán rồi");
-    }
-
-    let booking = await BookingModel.findById(payment.bookingId);
-
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
-      throw ErrorHelper.permissionDeny();
-    }
-
-    await expireStalePendingBookings({ _id: booking._id }, new Date());
-
-    booking = await BookingModel.findById(payment.bookingId);
-
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (booking.status === BookingStatusEnum.CANCELLED) {
-      payment.status = PaymentStatusEnum.FAILED;
-      await payment.save();
-      throw ErrorHelper.forbidden("Booking đã hết thời gian giữ chỗ");
-    }
-
+    // Xác nhận thanh toán
     payment.status = PaymentStatusEnum.PAID;
     await payment.save();
 
-    const paidAmount = Number(payment.amount || 0);
-    const totalPrice = Number(booking.totalPrice || 0);
-    const remainingAmount = Math.max(totalPrice - paidAmount, 0);
-
+    // Cập nhật đơn đặt sân sang trạng thái Đã xác nhận (CONFIRMED)
+    const paidAmount = Number(payment.amount);
     booking.depositStatus = DepositStatusEnum.PAID;
-    booking.depositMethod = mapPaymentMethodToDepositMethod(payment.method);
-    booking.remainingAmount = remainingAmount;
+    booking.depositMethod = mapPaymentMethodToDepositMethod(payment.method as PaymentMethodEnum);
+    booking.remainingAmount = Math.max(Number(booking.totalPrice) - paidAmount, 0);
     booking.status = BookingStatusEnum.CONFIRMED;
-    booking.expiredAt = undefined;
+    booking.expiredAt = undefined; // Hủy thời gian đếm ngược giữ chỗ
 
     await booking.save();
 
-    return res.json({
-      status: 200,
-      message: "Thanh toán thành công",
-    });
+    return res.json({ status: 200, message: "Xác nhận thanh toán thành công, sân đã được giữ" });
   }
 
   async getMyPayments(req: Request, res: Response) {
-    await expireStalePendingBookings(
-      {
-        userId: new Types.ObjectId(req.tokenInfo._id),
-      },
-      new Date(),
-    );
-
     const payments = await PaymentModel.find({
       userId: new Types.ObjectId(req.tokenInfo._id),
       isDeleted: false,
-    })
-      .populate("bookingId")
-      .sort({ createdAt: -1 });
-
-    return res.json({
-      status: 200,
-      data: payments,
-    });
+    }).populate("bookingId").sort({ createdAt: -1 });
+    return res.json({ status: 200, data: payments });
   }
 
   async getPaymentByBooking(req: Request, res: Response) {
     const { bookingId } = req.params;
-
-    if (!bookingId) {
-      throw ErrorHelper.requestDataInvalid("bookingId không hợp lệ");
-    }
-
-    await expireStalePendingBookings(
-      {
-        _id: bookingId,
-      },
-      new Date(),
-    );
-
-    const booking = await BookingModel.findOne({
-      _id: bookingId,
-      isDeleted: false,
-    });
-
-    if (!booking) {
-      throw ErrorHelper.forbidden("Booking không tồn tại");
-    }
-
-    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
-      throw ErrorHelper.permissionDeny();
-    }
-
     const payments = await PaymentModel.find({
-      bookingId: bookingId,
+      bookingId: new Types.ObjectId(bookingId),
       isDeleted: false,
     }).sort({ createdAt: -1 });
-
-    return res.json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: { payments },
-    });
+    return res.json({ status: 200, data: { payments } });
   }
 
   async cancelPayment(req: Request, res: Response) {
     const { id } = req.params;
-
     const payment = await PaymentModel.findById(id);
-
-    if (!payment) throw ErrorHelper.forbidden("Không tìm thấy payment");
-
-    const booking = await BookingModel.findById(payment.bookingId);
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
-      throw ErrorHelper.permissionDeny();
-    }
-
-    if (payment.status === PaymentStatusEnum.PAID) {
-      throw ErrorHelper.forbidden("Không thể huỷ payment đã thanh toán");
-    }
-
+    if (!payment || payment.status === PaymentStatusEnum.PAID) throw ErrorHelper.forbidden("Không thể hủy");
     payment.status = PaymentStatusEnum.FAILED;
     await payment.save();
-
-    return res.json({
-      status: 200,
-      message: "Đã huỷ payment",
-    });
+    return res.json({ status: 200, message: "Đã hủy yêu cầu thanh toán" });
   }
 
   async getQR(req: Request, res: Response) {
     const { paymentId } = req.params;
-
-    if (!paymentId) {
-      throw ErrorHelper.requestDataInvalid("paymentId không hợp lệ");
-    }
-
-    const payment = await PaymentModel.findById(paymentId);
-    if (!payment) throw ErrorHelper.forbidden("Payment không tồn tại");
-
-    const booking = await BookingModel.findById(payment.bookingId);
-    if (!booking) throw ErrorHelper.forbidden("Booking không tồn tại");
-
-    if (!(await canManageBookingPayment(req.tokenInfo, booking))) {
-      throw ErrorHelper.permissionDeny();
-    }
-
-    const qr = await QRCodeModel.findOne({
-      paymentId: paymentId,
-    });
-
-    if (!qr) throw ErrorHelper.forbidden("QR không tồn tại");
-
-    return res.json({
-      status: 200,
-      data: qr,
-    });
+    const qr = await QRCodeModel.findOne({ paymentId: new Types.ObjectId(paymentId) });
+    if (!qr) throw ErrorHelper.forbidden("Không tìm thấy QR");
+    return res.json({ status: 200, data: qr });
   }
 }
 
