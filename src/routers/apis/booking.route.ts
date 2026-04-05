@@ -203,17 +203,33 @@ const getLatestPaymentsByBookingIds = async (bookingIds: Types.ObjectId[] = []) 
   }
 
   const payments = await PaymentModel.find({
-    bookingId: { $in: bookingIds },
+    $or: [
+      { bookingId: { $in: bookingIds } },
+      { bookingIds: { $in: bookingIds } },
+    ],
     isDeleted: false,
   }).sort({ createdAt: -1 });
 
   const latestPaymentsByBookingId = new Map<string, any>();
+  const requestedBookingIds = new Set(bookingIds.map((bookingId) => String(bookingId || "").trim()));
 
   payments.forEach((payment) => {
-    const bookingId = String(payment?.bookingId || "").trim();
-    if (bookingId && !latestPaymentsByBookingId.has(bookingId)) {
-      latestPaymentsByBookingId.set(bookingId, payment);
-    }
+    const linkedBookingIds = Array.from(
+      new Set(
+        [
+          payment?.bookingId,
+          ...(Array.isArray(payment?.bookingIds) ? payment.bookingIds : []),
+        ]
+          .map((bookingId) => String(bookingId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+
+    linkedBookingIds.forEach((bookingId) => {
+      if (requestedBookingIds.has(bookingId) && !latestPaymentsByBookingId.has(bookingId)) {
+        latestPaymentsByBookingId.set(bookingId, payment);
+      }
+    });
   });
 
   return latestPaymentsByBookingId;

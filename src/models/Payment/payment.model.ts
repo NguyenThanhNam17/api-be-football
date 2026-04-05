@@ -8,9 +8,11 @@ import { Types } from "mongoose";
 
 export type IPayment = BaseDocument & {
   bookingId: Types.ObjectId;
+  bookingIds?: Types.ObjectId[];
   userId: Types.ObjectId;
   amount: number;
   method: PaymentMethodEnum;
+  paymentType?: "DEPOSIT" | "FULL";
   status: PaymentStatusEnum;
   qrCode?: string;
   transactionCode?: string;
@@ -25,6 +27,13 @@ const paymentSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+
+    bookingIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Booking",
+      },
+    ],
 
     userId: {
       type: Schema.Types.ObjectId,
@@ -42,6 +51,12 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       enum: Object.values(PaymentMethodEnum),
       default: PaymentMethodEnum.BANK,
+    },
+
+    paymentType: {
+      type: String,
+      enum: ["DEPOSIT", "FULL"],
+      default: "DEPOSIT",
     },
 
     status: {
@@ -65,6 +80,8 @@ const paymentSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+paymentSchema.index({ bookingIds: 1 });
 
 const PaymentModel = mongoose.model<IPayment>("Payment", paymentSchema);
 export { PaymentModel };

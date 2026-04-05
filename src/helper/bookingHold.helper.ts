@@ -97,7 +97,10 @@ export const expireStalePendingBookings = async (
 
   await PaymentModel.updateMany(
     {
-      bookingId: { $in: staleIds },
+      $or: [
+        { bookingId: { $in: staleIds } },
+        { bookingIds: { $in: staleIds } },
+      ],
       isDeleted: false,
       status: PaymentStatusEnum.PENDING,
     },

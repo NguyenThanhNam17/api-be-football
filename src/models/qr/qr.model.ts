@@ -4,6 +4,9 @@ import { BaseDocument } from "../../base/baseModel";
 export type IQRCode = BaseDocument & {
   paymentId: Types.ObjectId;
   qrImage: string;
+  qrText?: string;
+  payUrl?: string;
+  deeplink?: string;
   expiredAt?: Date;
 };
 
@@ -18,6 +21,18 @@ const qrSchema = new mongoose.Schema(
     qrImage: {
       type: String,
       required: true
+    },
+
+    qrText: {
+      type: String,
+    },
+
+    payUrl: {
+      type: String,
+    },
+
+    deeplink: {
+      type: String,
     },
 
     expiredAt: {
