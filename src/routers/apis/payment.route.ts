@@ -42,6 +42,19 @@ const MOMO_CONFIG = {
   lang: String(process.env.MOMO_LANG || "vi").trim() || "vi",
 };
 
+const parseBooleanEnv = (value: any) =>
+  ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+
+const parsePositiveNumberEnv = (value: any, fallback: number) => {
+  const normalizedValue = Number(value);
+  return Number.isFinite(normalizedValue) && normalizedValue > 0 ? normalizedValue : fallback;
+};
+
+const MOMO_MOCK_CONFIG = {
+  enabled: parseBooleanEnv(process.env.MOMO_MOCK_MODE),
+  autoConfirmMs: parsePositiveNumberEnv(process.env.MOMO_MOCK_AUTO_CONFIRM_SECONDS, 8) * 1000,
+};
+
 const resolveObjectId = (value: any) => {
   const normalizedValue = value && typeof value === "object" && value._id ? value._id : value;
   if (!normalizedValue || !Types.ObjectId.isValid(normalizedValue)) return null;
@@ -97,12 +110,36 @@ const normalizePaymentType = (value: any) => {
 const getPaymentBookingIds = (payment: any) =>
   normalizeRequestedBookingIds(payment?.bookingId, payment?.bookingIds);
 
+const hasExplicitAmountValue = (value: any) =>
+  value !== null &&
+  value !== undefined &&
+  (typeof value !== "string" || value.trim() !== "");
+
+const calculateOutstandingAmountForBooking = (booking: any) => {
+  const totalPrice = Math.max(Number(booking?.totalPrice || 0), 0);
+  const depositAmount = Math.max(Number(booking?.depositAmount || 0), 0);
+  const rawRemainingAmount = hasExplicitAmountValue(booking?.remainingAmount)
+    ? Number(booking?.remainingAmount)
+    : Number.NaN;
+  const depositStatus = String(booking?.depositStatus || "").trim().toUpperCase();
+
+  if (Number.isFinite(rawRemainingAmount)) {
+    return Math.max(rawRemainingAmount, 0);
+  }
+
+  if (depositStatus === DepositStatusEnum.PAID) {
+    return Math.max(totalPrice - depositAmount, 0);
+  }
+
+  return totalPrice;
+};
+
 const calculatePaymentAmountForBooking = (booking: any, paymentType: string) => {
   const totalPrice = Number(booking?.totalPrice || 0);
   const depositAmount = Number(booking?.depositAmount || 0);
 
   if (normalizePaymentType(paymentType) === "FULL") {
-    return totalPrice;
+    return calculateOutstandingAmountForBooking(booking);
   }
 
   return depositAmount > 0 ? depositAmount : totalPrice / 2;
@@ -146,6 +183,10 @@ const mapPaymentMethodToDepositMethod = (method: PaymentMethodEnum) => {
 };
 
 const ensureMomoConfigured = () => {
+  if (MOMO_MOCK_CONFIG.enabled) {
+    return;
+  }
+
   if (!MOMO_CONFIG.partnerCode || !MOMO_CONFIG.accessKey || !MOMO_CONFIG.secretKey) {
     throw ErrorHelper.forbidden(
       "Chua cau hinh MoMo sandbox. Vui long them MOMO_PARTNER_CODE, MOMO_ACCESS_KEY va MOMO_SECRET_KEY vao .env backend.",
@@ -255,7 +296,43 @@ const buildQrPreviewUrl = (qrPayload: string) =>
     ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrPayload)}`
     : "";
 
+const createMockMomoPayment = ({
+  paymentId,
+  amount,
+  orderInfo,
+}: {
+  paymentId: Types.ObjectId | string;
+  amount: number;
+  orderInfo: string;
+}) => {
+  const orderId = `MOMO_MOCK_${String(paymentId || "").trim()}`;
+  const autoConfirmAt = new Date(Date.now() + MOMO_MOCK_CONFIG.autoConfirmMs).toISOString();
+  const qrPayload = [
+    "MOMO-MOCK",
+    `orderId=${orderId}`,
+    `amount=${amount}`,
+    `orderInfo=${orderInfo}`,
+    `autoConfirmAt=${autoConfirmAt}`,
+  ].join("|");
+
+  return {
+    orderId,
+    response: {
+      resultCode: 0,
+      message: "Mock MoMo payment created.",
+      qrCodeUrl: qrPayload,
+      payUrl: "",
+      deeplink: "",
+      autoConfirmAt,
+    },
+  };
+};
+
 const verifyMomoIpnSignature = (payload: any) => {
+  if (MOMO_MOCK_CONFIG.enabled) {
+    return false;
+  }
+
   if (!MOMO_CONFIG.accessKey || !MOMO_CONFIG.secretKey) {
     return false;
   }
@@ -296,6 +373,10 @@ const createMomoPayment = async ({
   orderInfo: string;
 }) => {
   ensureMomoConfigured();
+
+  if (MOMO_MOCK_CONFIG.enabled) {
+    return createMockMomoPayment({ paymentId, amount, orderInfo });
+  }
 
   const orderId = createMomoOrderId(paymentId);
   const requestId = createMomoRequestId(paymentId);
@@ -348,6 +429,14 @@ const createMomoPayment = async ({
 const queryMomoPaymentStatus = async (orderId: string) => {
   ensureMomoConfigured();
 
+  if (MOMO_MOCK_CONFIG.enabled) {
+    return {
+      resultCode: 1000,
+      message: "Mock MoMo dang cho tu dong xac nhan.",
+      orderId,
+    };
+  }
+
   const requestId = createMomoRequestId(orderId);
   const signature = createHmacSha256(
     buildMomoQuerySignature({
@@ -379,9 +468,12 @@ const applySuccessfulPayment = async (
   await Promise.all(
     orderedBookings.map(async (booking) => {
       const paidAmount = calculatePaymentAmountForBooking(booking, resolvedPaymentType);
+      const isFullPayment = normalizePaymentType(resolvedPaymentType) === "FULL";
       booking.depositStatus = DepositStatusEnum.PAID;
       booking.depositMethod = mapPaymentMethodToDepositMethod(payment.method as PaymentMethodEnum);
-      booking.remainingAmount = Math.max(Number(booking.totalPrice) - paidAmount, 0);
+      booking.remainingAmount = isFullPayment
+        ? 0
+        : Math.max(Number(booking.totalPrice) - paidAmount, 0);
       booking.status = BookingStatusEnum.CONFIRMED;
       booking.expiredAt = undefined;
       await booking.save();
@@ -389,6 +481,51 @@ const applySuccessfulPayment = async (
   );
 
   return payment;
+};
+
+const loadOrderedBookingsForPayment = async (payment: any) => {
+  const paymentBookingIds = getPaymentBookingIds(payment);
+  const bookings = await BookingModel.find({
+    _id: { $in: paymentBookingIds },
+    isDeleted: false,
+  }).sort({ createdAt: 1 });
+
+  return {
+    paymentBookingIds,
+    orderedBookings: mapOrderedBookings(bookings, paymentBookingIds),
+  };
+};
+
+const syncMockMomoPaymentStatus = async (
+  payment: any,
+  orderedBookings: any[] = [],
+) => {
+  if (
+    !MOMO_MOCK_CONFIG.enabled
+    || payment?.method !== PaymentMethodEnum.MOMO
+    || payment?.status !== PaymentStatusEnum.PENDING
+  ) {
+    return payment;
+  }
+
+  const createdAt = new Date(payment?.createdAt || Date.now());
+  if (
+    Number.isNaN(createdAt.getTime())
+    || Date.now() - createdAt.getTime() < MOMO_MOCK_CONFIG.autoConfirmMs
+  ) {
+    return payment;
+  }
+
+  const resolvedOrderedBookings = orderedBookings.length
+    ? orderedBookings
+    : (await loadOrderedBookingsForPayment(payment)).orderedBookings;
+
+  if (!resolvedOrderedBookings.length) {
+    return payment;
+  }
+
+  const resolvedPaymentType = inferStoredPaymentType(payment, resolvedOrderedBookings);
+  return applySuccessfulPayment(payment, resolvedOrderedBookings, resolvedPaymentType);
 };
 
 class PaymentRoute extends BaseRoute {
@@ -485,9 +622,14 @@ class PaymentRoute extends BaseRoute {
   async createPayment(req: Request, res: Response) {
     const { bookingId, bookingIds, method, paymentType } = req.body;
     const targetBookingIds = normalizeRequestedBookingIds(bookingId, bookingIds);
+    const normalizedMethod = String(method || "").trim().toUpperCase();
 
-    if (!targetBookingIds.length || !method) {
+    if (!targetBookingIds.length || !normalizedMethod) {
       throw ErrorHelper.requestDataInvalid("Thieu du lieu bookingId/bookingIds hoac phuong thuc");
+    }
+
+    if (normalizedMethod === PaymentMethodEnum.MOMO) {
+      throw ErrorHelper.forbidden("Phuong thuc thanh toan MoMo da duoc go bo.");
     }
 
     let bookings = await BookingModel.find({
@@ -547,6 +689,11 @@ class PaymentRoute extends BaseRoute {
     }).sort({ createdAt: -1 });
 
     for (const existingPayment of existingPayments) {
+      await syncMockMomoPaymentStatus(existingPayment, orderedBookings);
+      if (existingPayment.status !== PaymentStatusEnum.PENDING) {
+        continue;
+      }
+
       const existingBookingIds = getPaymentBookingIds(existingPayment);
       const existingPaymentType = inferStoredPaymentType(existingPayment, orderedBookings);
       const sameBookingIds = haveSameBookingIds(existingBookingIds, targetBookingIds);
@@ -578,7 +725,7 @@ class PaymentRoute extends BaseRoute {
       bookingIds: targetBookingIds,
       userId: req.tokenInfo._id,
       amount: paymentAmount,
-      method: method,
+      method: normalizedMethod,
       paymentType: normalizedType,
       status: PaymentStatusEnum.PENDING,
     });
@@ -711,6 +858,8 @@ class PaymentRoute extends BaseRoute {
       }
     }
 
+    await syncMockMomoPaymentStatus(payment, orderedBookings);
+
     if (payment.status === PaymentStatusEnum.PAID) {
       return res.json({
         status: 200,
@@ -723,6 +872,14 @@ class PaymentRoute extends BaseRoute {
       return res.json({
         status: 200,
         message: "Payment chua duoc xac nhan.",
+        data: { payment },
+      });
+    }
+
+    if (MOMO_MOCK_CONFIG.enabled) {
+      return res.json({
+        status: 200,
+        message: "Mock MoMo chua den thoi diem tu dong xac nhan.",
         data: { payment },
       });
     }
@@ -759,6 +916,11 @@ class PaymentRoute extends BaseRoute {
       userId: new Types.ObjectId(req.tokenInfo._id),
       isDeleted: false,
     }).populate("bookingId").sort({ createdAt: -1 });
+
+    await Promise.all(
+      payments.map((payment: any) => syncMockMomoPaymentStatus(payment).catch(() => payment)),
+    );
+
     return res.json({ status: 200, data: payments });
   }
 
@@ -777,6 +939,11 @@ class PaymentRoute extends BaseRoute {
       ],
       isDeleted: false,
     }).sort({ createdAt: -1 });
+
+    await Promise.all(
+      payments.map((payment: any) => syncMockMomoPaymentStatus(payment).catch(() => payment)),
+    );
+
     return res.json({ status: 200, data: { payments } });
   }
 

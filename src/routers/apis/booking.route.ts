@@ -117,17 +117,19 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
       : null;
   const latestPayment = latestPaymentsByBookingId.get(String(rawBooking?._id || "")) || null;
   const latestPaymentAmount = Number(latestPayment?.amount || 0);
+  const latestPaymentStatus = String(latestPayment?.status || "").trim().toUpperCase();
+  const latestPaymentType = String(latestPayment?.paymentType || "").trim().toUpperCase();
   const timeSlotLabel = getTimeSlotLabel(timeSlot);
   const holdExpiresAt =
     rawBooking?.expiredAt || getBookingHoldExpiresAt(rawBooking).toISOString();
   const isDepositPaid =
     String(rawBooking?.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID ||
-    String(latestPayment?.status || "").trim().toUpperCase() === PaymentStatusEnum.PAID;
+    latestPaymentStatus === PaymentStatusEnum.PAID;
   const isFullyPaid =
-    isDepositPaid &&
+    Number(rawBooking?.remainingAmount || 0) <= 0 ||
     (
-      Number(rawBooking?.remainingAmount || 0) <= 0 ||
-      latestPaymentAmount >= Number(rawBooking?.totalPrice || 0)
+      latestPaymentStatus === PaymentStatusEnum.PAID &&
+      latestPaymentType === "FULL"
     );
 
   return {
@@ -181,6 +183,8 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
     customer: buildCustomerInfo(rawBooking),
     paymentId: latestPayment?._id,
     paymentStatus: String(latestPayment?.status || "").trim(),
+    paymentType: String(latestPayment?.paymentType || "").trim(),
+    paymentMethod: String(latestPayment?.method || "").trim(),
     paidAmount: latestPaymentAmount,
     depositPaid: isDepositPaid,
     fullyPaid: isFullyPaid,
