@@ -17,7 +17,9 @@ import {
 } from "../../helper/otp.helper";
 import {
   getSmtpMissingConfigMessage,
+  getSmtpSendFailureMessage,
   isSmtpConfigured,
+  logSmtpSendFailure,
   sendOtpEmail,
 } from "../../helper/mail.helper";
 
@@ -102,10 +104,18 @@ class UserRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid(getSmtpMissingConfigMessage());
     }
 
-    const issuedOtp = await issueOtpCode({
-      email: String(email || ""),
-      purpose: String(purpose || "auth"),
-    });
+    let issuedOtp: Awaited<ReturnType<typeof issueOtpCode>>;
+
+    try {
+      issuedOtp = await issueOtpCode({
+        email: String(email || ""),
+        purpose: String(purpose || "auth"),
+      });
+    } catch (error) {
+      throw ErrorHelper.requestDataInvalid(
+        String((error as Error)?.message || "Can not issue OTP."),
+      );
+    }
 
     try {
       await sendOtpEmail({
@@ -114,9 +124,14 @@ class UserRoute extends BaseRoute {
         purpose: issuedOtp.purpose,
         expiresInMinutes: issuedOtp.expiresInMinutes,
       });
-    } catch (_error) {
+    } catch (error) {
       await invalidateOtpCode(issuedOtp.otpId);
-      throw ErrorHelper.somethingWentWrong("Can not send OTP email");
+      logSmtpSendFailure(error, {
+        route: "/api/user/sendOtp",
+        email: issuedOtp.email,
+        purpose: issuedOtp.purpose,
+      });
+      throw ErrorHelper.serviceUnavailable(getSmtpSendFailureMessage(error));
     }
 
     return res.status(200).json({
