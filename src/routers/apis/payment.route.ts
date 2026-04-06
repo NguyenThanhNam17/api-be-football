@@ -285,6 +285,43 @@ const buildQrPreviewUrl = (qrPayload: string) =>
     ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrPayload)}`
     : "";
 
+const pickFirstNonEmptyString = (...values: any[]) => {
+  for (const value of values) {
+    const normalizedValue = String(value || "").trim();
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+
+  return "";
+};
+
+const extractMomoQrArtifacts = (response: any) => {
+  const payUrl = pickFirstNonEmptyString(
+    response?.payUrl,
+    response?.paymentUrl,
+  );
+  const deeplink = pickFirstNonEmptyString(
+    response?.deeplink,
+    response?.deepLink,
+    response?.deeplinkMiniApp,
+    response?.miniAppLink,
+  );
+  const qrPayload = pickFirstNonEmptyString(
+    response?.qrCodeUrl,
+    response?.qrCode,
+    response?.qrUrl,
+    deeplink,
+    payUrl,
+  );
+
+  return {
+    qrPayload,
+    payUrl,
+    deeplink,
+  };
+};
+
 const createMockMomoPayment = ({
   paymentId,
   amount,
@@ -734,14 +771,32 @@ class PaymentRoute extends BaseRoute {
           amount: paymentAmount,
           orderInfo: description,
         });
-        const rawQrPayload = String(momoPayment.response?.qrCodeUrl || "").trim();
+        const momoQrArtifacts = extractMomoQrArtifacts(momoPayment.response);
 
         payment.transactionCode = momoPayment.orderId;
-        payment.qrCode = rawQrPayload;
-        qrText = rawQrPayload;
-        qrImage = buildQrPreviewUrl(rawQrPayload);
-        payUrl = String(momoPayment.response?.payUrl || "").trim();
-        deeplink = String(momoPayment.response?.deeplink || "").trim();
+        payment.qrCode = momoQrArtifacts.qrPayload;
+        qrText = momoQrArtifacts.qrPayload;
+        qrImage = buildQrPreviewUrl(momoQrArtifacts.qrPayload);
+        payUrl = momoQrArtifacts.payUrl;
+        deeplink = momoQrArtifacts.deeplink;
+
+        if (!qrImage) {
+          console.error("MoMo QR payload missing", {
+            paymentId: String(payment._id || "").trim(),
+            orderId: momoPayment.orderId,
+            resultCode: momoPayment.response?.resultCode,
+            message: momoPayment.response?.message,
+            qrCodeUrl: String(momoPayment.response?.qrCodeUrl || "").trim(),
+            qrCode: String(momoPayment.response?.qrCode || "").trim(),
+            qrUrl: String(momoPayment.response?.qrUrl || "").trim(),
+            payUrl,
+            deeplink,
+            deeplinkMiniApp: String(momoPayment.response?.deeplinkMiniApp || "").trim(),
+          });
+          throw ErrorHelper.forbidden(
+            "MoMo sandbox khong tra ve du lieu QR hop le.",
+          );
+        }
       } else {
         payment.transactionCode = description;
         const qrUrl = `https://img.vietqr.io/image/${BANK_CONFIG.BANK_ID}-${BANK_CONFIG.ACCOUNT_NO}-compact2.png?amount=${paymentAmount}&addInfo=${encodeURIComponent(description)}&accountName=${encodeURIComponent(BANK_CONFIG.ACCOUNT_NAME)}`;
