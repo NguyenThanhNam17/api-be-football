@@ -29,6 +29,15 @@ const BANK_CONFIG = {
   ACCOUNT_NAME: "NGUYEN VAN A",
 };
 
+const deriveMomoReturnUrlFromIpnUrl = (ipnUrl: string) => {
+  const normalizedIpnUrl = String(ipnUrl || "").trim();
+  if (!normalizedIpnUrl) {
+    return "";
+  }
+
+  return normalizedIpnUrl.replace(/\/ipn\/momo\/?$/i, "/return/momo");
+};
+
 const MOMO_CONFIG = {
   apiBaseUrl: String(process.env.MOMO_API_BASE_URL || "https://test-payment.momo.vn").trim().replace(/\/+$/g, ""),
   partnerCode: String(process.env.MOMO_PARTNER_CODE || "").trim(),
@@ -36,8 +45,13 @@ const MOMO_CONFIG = {
   secretKey: String(process.env.MOMO_SECRET_KEY || "").trim(),
   partnerName: String(process.env.MOMO_PARTNER_NAME || process.env.APP_NAME || "Football Booking").trim(),
   storeId: String(process.env.MOMO_STORE_ID || "FootballBooking").trim(),
-  redirectUrl: String(process.env.MOMO_REDIRECT_URL || "https://example.com/momo-return").trim(),
   ipnUrl: String(process.env.MOMO_IPN_URL || "https://example.com/momo-ipn").trim(),
+  redirectUrl: String(process.env.MOMO_REDIRECT_URL || "https://example.com/momo-return").trim(),
+  providerRedirectUrl: String(
+    process.env.MOMO_PROVIDER_REDIRECT_URL
+    || deriveMomoReturnUrlFromIpnUrl(process.env.MOMO_IPN_URL || "")
+    || "https://example.com/momo-return-handler",
+  ).trim(),
   lang: String(process.env.MOMO_LANG || "vi").trim() || "vi",
 };
 
@@ -53,6 +67,14 @@ const MOMO_MOCK_CONFIG = {
   enabled: parseBooleanEnv(process.env.MOMO_MOCK_MODE),
   autoConfirmMs: parsePositiveNumberEnv(process.env.MOMO_MOCK_AUTO_CONFIRM_SECONDS, 8) * 1000,
 };
+
+const MOMO_HTTP_CONFIG = {
+  createTimeoutMs: parsePositiveNumberEnv(process.env.MOMO_CREATE_TIMEOUT_MS, 15000),
+  queryTimeoutMs: parsePositiveNumberEnv(process.env.MOMO_QUERY_TIMEOUT_MS, 8000),
+  retryCount: Math.max(1, parsePositiveNumberEnv(process.env.MOMO_RETRY_COUNT, 2)),
+};
+
+const isMomoSandboxEnvironment = MOMO_CONFIG.apiBaseUrl.includes("test-payment.momo.vn");
 
 const resolveObjectId = (value: any) => {
   const normalizedValue = value && typeof value === "object" && value._id ? value._id : value;
@@ -196,38 +218,58 @@ const ensureMomoConfigured = () => {
 const createHmacSha256 = (data: string, secretKey: string) =>
   crypto.createHmac("sha256", secretKey).update(data).digest("hex");
 
-const postJson = async (url: string, payload: Record<string, any>) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+const postJson = async (
+  url: string,
+  payload: Record<string, any>,
+  {
+    timeoutMs = 10000,
+    retryCount = 1,
+  }: {
+    timeoutMs?: number;
+    retryCount?: number;
+  } = {},
+) => {
+  let lastError: any = null;
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json; charset=UTF-8",
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+  for (let attempt = 1; attempt <= Math.max(1, retryCount); attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const rawData = await response.text();
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(
-        rawData || `MoMo request failed with status ${response.status}`,
-      );
+      const rawData = await response.text();
+
+      if (!response.ok) {
+        throw new Error(
+          rawData || `MoMo request failed with status ${response.status}`,
+        );
+      }
+
+      return rawData ? JSON.parse(rawData) : {};
+    } catch (error: any) {
+      lastError = error;
+
+      if (error?.name === "AbortError") {
+        lastError = new Error("MoMo request timeout");
+      }
+
+      if (attempt >= Math.max(1, retryCount)) {
+        throw lastError;
+      }
+    } finally {
+      clearTimeout(timer);
     }
-
-    return rawData ? JSON.parse(rawData) : {};
-  } catch (error: any) {
-    if (error?.name === "AbortError") {
-      throw new Error("MoMo request timeout");
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timer);
   }
+
+  throw lastError || new Error("MoMo request failed");
 };
 
 const buildMomoCreateSignature = (params: {
@@ -416,7 +458,7 @@ const createMomoPayment = async ({
       orderId,
       orderInfo,
       partnerCode: MOMO_CONFIG.partnerCode,
-      redirectUrl: MOMO_CONFIG.redirectUrl,
+      redirectUrl: MOMO_CONFIG.providerRedirectUrl,
       requestId,
       requestType,
     }),
@@ -431,13 +473,16 @@ const createMomoPayment = async ({
     amount,
     orderId,
     orderInfo,
-    redirectUrl: MOMO_CONFIG.redirectUrl,
+    redirectUrl: MOMO_CONFIG.providerRedirectUrl,
     ipnUrl: MOMO_CONFIG.ipnUrl,
     lang: MOMO_CONFIG.lang,
     requestType,
     autoCapture: true,
     extraData,
     signature,
+  }, {
+    timeoutMs: MOMO_HTTP_CONFIG.createTimeoutMs,
+    retryCount: MOMO_HTTP_CONFIG.retryCount,
   });
 
   if (Number(response?.resultCode) !== 0) {
@@ -479,6 +524,9 @@ const queryMomoPaymentStatus = async (orderId: string) => {
     orderId,
     lang: MOMO_CONFIG.lang,
     signature,
+  }, {
+    timeoutMs: MOMO_HTTP_CONFIG.queryTimeoutMs,
+    retryCount: MOMO_HTTP_CONFIG.retryCount,
   });
 };
 
@@ -554,6 +602,131 @@ const syncMockMomoPaymentStatus = async (
   return applySuccessfulPayment(payment, resolvedOrderedBookings, resolvedPaymentType);
 };
 
+const getMomoPayloadValue = (payload: any, key: string) => {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const directValue = payload[key];
+  if (directValue !== undefined && directValue !== null) {
+    return String(directValue).trim();
+  }
+
+  const lowerKeyEntry = Object.entries(payload).find(
+    ([entryKey]) => String(entryKey || "").trim().toLowerCase() === key.toLowerCase(),
+  );
+
+  return lowerKeyEntry ? String(lowerKeyEntry[1] ?? "").trim() : "";
+};
+
+const isAcceptedMomoProviderPayload = (payload: any) => {
+  const partnerCode = getMomoPayloadValue(payload, "partnerCode");
+  if (!partnerCode || partnerCode !== MOMO_CONFIG.partnerCode) {
+    return false;
+  }
+
+  if (verifyMomoIpnSignature(payload)) {
+    return true;
+  }
+
+  return isMomoSandboxEnvironment;
+};
+
+const buildMomoClientRedirectUrl = (payload: any, payment: any = null) => {
+  let redirectTarget = String(MOMO_CONFIG.redirectUrl || "").trim();
+  const paymentStatus = Number(getMomoPayloadValue(payload, "resultCode")) === 0 ? "success" : "error";
+  const paymentMessage = pickFirstNonEmptyString(
+    getMomoPayloadValue(payload, "message"),
+    paymentStatus === "success"
+      ? "Thanh toan thanh cong."
+      : "Thanh toan that bai.",
+  );
+
+  try {
+    const redirectUrl = new URL(redirectTarget);
+    if (!redirectUrl.pathname || redirectUrl.pathname === "/") {
+      redirectUrl.pathname = "/thanh-toan-cua-toi";
+      redirectTarget = redirectUrl.toString();
+    }
+
+    const finalizedRedirectUrl = new URL(redirectTarget);
+    finalizedRedirectUrl.searchParams.set("paymentStatus", paymentStatus);
+    finalizedRedirectUrl.searchParams.set("paymentMessage", paymentMessage);
+
+    const orderId = getMomoPayloadValue(payload, "orderId");
+    if (orderId) {
+      finalizedRedirectUrl.searchParams.set("orderId", orderId);
+    }
+
+    if (payment?._id) {
+      finalizedRedirectUrl.searchParams.set("paymentId", String(payment._id));
+    }
+
+    const bookingId = String(payment?.bookingId || "").trim();
+    if (bookingId) {
+      finalizedRedirectUrl.searchParams.set("bookingId", bookingId);
+    }
+
+    return finalizedRedirectUrl.toString();
+  } catch (_error) {
+    return redirectTarget || "/";
+  }
+};
+
+const syncMomoPaymentFromProviderPayload = async (payload: any) => {
+  const orderId = getMomoPayloadValue(payload, "orderId");
+  const resultCode = Number(getMomoPayloadValue(payload, "resultCode"));
+  const receivedAmount = Number(getMomoPayloadValue(payload, "amount") || 0);
+
+  if (!orderId || !isAcceptedMomoProviderPayload(payload)) {
+    return null;
+  }
+
+  const payment = await PaymentModel.findOne({
+    transactionCode: orderId,
+    isDeleted: false,
+  });
+
+  if (!payment) {
+    return null;
+  }
+
+  if (
+    Number.isFinite(receivedAmount)
+    && receivedAmount > 0
+    && Math.round(Number(payment.amount || 0)) !== Math.round(receivedAmount)
+  ) {
+    return payment;
+  }
+
+  if (payment.status === PaymentStatusEnum.PAID) {
+    return payment;
+  }
+
+  const paymentBookingIds = getPaymentBookingIds(payment);
+  const bookings = await BookingModel.find({
+    _id: { $in: paymentBookingIds },
+    isDeleted: false,
+  }).sort({ createdAt: 1 });
+  const orderedBookings = mapOrderedBookings(bookings, paymentBookingIds);
+
+  if (!orderedBookings.length || orderedBookings.length !== paymentBookingIds.length) {
+    return payment;
+  }
+
+  if (resultCode === 0) {
+    const resolvedPaymentType = inferStoredPaymentType(payment, orderedBookings);
+    return applySuccessfulPayment(payment, orderedBookings, resolvedPaymentType);
+  }
+
+  if (resultCode !== 9000 && payment.status === PaymentStatusEnum.PENDING) {
+    payment.status = PaymentStatusEnum.FAILED;
+    await payment.save();
+  }
+
+  return payment;
+};
+
 class PaymentRoute extends BaseRoute {
   constructor() {
     super();
@@ -561,6 +734,7 @@ class PaymentRoute extends BaseRoute {
 
   customRouting() {
     this.router.post("/ipn/momo", this.route(this.handleMomoIpn));
+    this.router.get("/return/momo", this.route(this.handleMomoReturn));
     this.router.post("/createPayment", [this.authentication], this.route(this.createPayment));
     this.router.post("/confirmPayment", [this.authentication], this.route(this.confirmPayment));
     this.router.get("/checkStatus/:paymentId", [this.authentication], this.route(this.checkPaymentStatus));
@@ -586,63 +760,24 @@ class PaymentRoute extends BaseRoute {
 
   async handleMomoIpn(req: Request, res: Response) {
     try {
-      const payload = req.body || {};
-      const orderId = String(payload?.orderId || "").trim();
-      const partnerCode = String(payload?.partnerCode || "").trim();
-      const resultCode = Number(payload?.resultCode);
-      const receivedAmount = Number(payload?.amount || 0);
-
-      if (
-        !orderId
-        || partnerCode !== MOMO_CONFIG.partnerCode
-        || !verifyMomoIpnSignature(payload)
-      ) {
-        return res.status(204).send();
-      }
-
-      const payment = await PaymentModel.findOne({
-        transactionCode: orderId,
-        isDeleted: false,
-      });
-
-      if (!payment) {
-        return res.status(204).send();
-      }
-
-      if (Math.round(Number(payment.amount || 0)) !== Math.round(receivedAmount)) {
-        return res.status(204).send();
-      }
-
-      if (payment.status === PaymentStatusEnum.PAID) {
-        return res.status(204).send();
-      }
-
-      const paymentBookingIds = getPaymentBookingIds(payment);
-      const bookings = await BookingModel.find({
-        _id: { $in: paymentBookingIds },
-        isDeleted: false,
-      }).sort({ createdAt: 1 });
-      const orderedBookings = mapOrderedBookings(bookings, paymentBookingIds);
-
-      if (!orderedBookings.length || orderedBookings.length !== paymentBookingIds.length) {
-        return res.status(204).send();
-      }
-
-      if (resultCode === 0) {
-        const resolvedPaymentType = inferStoredPaymentType(payment, orderedBookings);
-        await applySuccessfulPayment(payment, orderedBookings, resolvedPaymentType);
-        return res.status(204).send();
-      }
-
-      if (resultCode !== 9000 && payment.status === PaymentStatusEnum.PENDING) {
-        payment.status = PaymentStatusEnum.FAILED;
-        await payment.save();
-      }
+      await syncMomoPaymentFromProviderPayload(req.body || {});
     } catch (error) {
       console.error("MoMo IPN handling failed", error);
     }
 
     return res.status(204).send();
+  }
+
+  async handleMomoReturn(req: Request, res: Response) {
+    let payment: any = null;
+
+    try {
+      payment = await syncMomoPaymentFromProviderPayload(req.query || {});
+    } catch (error) {
+      console.error("MoMo return handling failed", error);
+    }
+
+    return res.redirect(302, buildMomoClientRedirectUrl(req.query || {}, payment));
   }
 
   async createPayment(req: Request, res: Response) {
@@ -929,7 +1064,38 @@ class PaymentRoute extends BaseRoute {
       throw ErrorHelper.forbidden("Khong tim thay ma giao dich MoMo");
     }
 
-    const momoStatus = await queryMomoPaymentStatus(orderId);
+    let momoStatus: any = null;
+
+    try {
+      momoStatus = await queryMomoPaymentStatus(orderId);
+    } catch (error: any) {
+      console.error("MoMo status query failed", {
+        paymentId: String(payment._id || "").trim(),
+        orderId,
+        message: String(error?.message || error || "").trim(),
+      });
+
+      const refreshedPayment = await PaymentModel.findById(normalizedPaymentId);
+      if (refreshedPayment?.status === PaymentStatusEnum.PAID) {
+        return res.json({
+          status: 200,
+          message: "Da thanh toan",
+          data: { payment: refreshedPayment },
+        });
+      }
+
+      return res.json({
+        status: 200,
+        message: "MoMo dang dong bo giao dich. He thong se tu xac nhan khi nhan callback.",
+        data: {
+          payment: refreshedPayment || payment,
+          momoStatus: {
+            resultCode: -1,
+            message: String(error?.message || "MoMo request timeout"),
+          },
+        },
+      });
+    }
 
     if (Number(momoStatus?.resultCode) === 0) {
       const resolvedPaymentType = inferStoredPaymentType(payment, orderedBookings);
