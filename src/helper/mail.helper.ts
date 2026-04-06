@@ -162,6 +162,28 @@ const messageContains = (message: string, patterns: string[]) => {
   return patterns.some((pattern) => normalizedMessage.includes(pattern));
 };
 
+const isGmailSmtpConfig = (config: SmtpRuntimeConfig) =>
+  String(config.service || "").trim().toLowerCase() === "gmail"
+  || String(config.host || "").trim().toLowerCase() === DEFAULT_SMTP_HOST;
+
+const isSmtpConnectionFailure = (error: unknown) => {
+  const mailError = extractMailError(error);
+  const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
+
+  return (
+    SMTP_CONNECTION_ERROR_CODES.has(String(mailError.code || "").toUpperCase())
+    || messageContains(combinedMessage, [
+      "timeout",
+      "timed out",
+      "connection closed",
+      "connection timeout",
+      "greeting never received",
+      "getaddrinfo",
+      "network",
+    ])
+  );
+};
+
 export const isSmtpConfigured = () => {
   const config = readSmtpConfig();
   return Boolean(config.user && config.pass);
@@ -278,9 +300,10 @@ const resolveSmtpHost = async (config: SmtpRuntimeConfig) => {
   }
 };
 
-const getTransporter = async () => {
-  const config = readSmtpConfig();
-
+const createTransporterForConfig = async (
+  config: SmtpRuntimeConfig,
+  { useCache = false }: { useCache?: boolean } = {},
+) => {
   if (!config.user || !config.pass) {
     throw new Error(getSmtpMissingConfigMessage());
   }
@@ -288,40 +311,57 @@ const getTransporter = async () => {
   const resolvedHost = await resolveSmtpHost(config);
   const cacheKey = `${getTransporterCacheKey(config)}|${resolvedHost.connectionHost}`;
 
-  if (!transporter || transporterCacheKey !== cacheKey) {
-    transporterCacheKey = cacheKey;
+  if (useCache && transporter && transporterCacheKey === cacheKey) {
+    return {
+      transporter,
+      config,
+    };
+  }
 
-    transporter = nodemailer.createTransport({
-      ...(config.service ? { service: config.service } : {}),
-      host: resolvedHost.connectionHost,
-      port: config.port,
-      secure: config.secure,
-      requireTLS: config.requireTls,
-      connectionTimeout: config.connectionTimeout,
-      greetingTimeout: config.greetingTimeout,
-      socketTimeout: config.socketTimeout,
-      logger: config.debug,
-      debug: config.debug,
-      auth: {
-        user: config.user,
-        pass: config.pass,
-      },
-      tls: {
-        servername: resolvedHost.tlsServername,
-        ...(config.tlsRejectUnauthorized
-          ? {}
-          : {
-              rejectUnauthorized: false,
-            }),
-      },
-    });
+  const nextTransporter = nodemailer.createTransport({
+    ...(config.service ? { service: config.service } : {}),
+    host: resolvedHost.connectionHost,
+    port: config.port,
+    secure: config.secure,
+    requireTLS: config.requireTls,
+    connectionTimeout: config.connectionTimeout,
+    greetingTimeout: config.greetingTimeout,
+    socketTimeout: config.socketTimeout,
+    logger: config.debug,
+    debug: config.debug,
+    auth: {
+      user: config.user,
+      pass: config.pass,
+    },
+    tls: {
+      servername: resolvedHost.tlsServername,
+      ...(config.tlsRejectUnauthorized
+        ? {}
+        : {
+            rejectUnauthorized: false,
+          }),
+    },
+  });
+
+  if (useCache) {
+    transporterCacheKey = cacheKey;
+    transporter = nextTransporter;
   }
 
   return {
-    transporter,
+    transporter: nextTransporter,
     config,
   };
 };
+
+const getTransporter = async () => createTransporterForConfig(readSmtpConfig(), { useCache: true });
+
+const buildGmailSslFallbackConfig = (config: SmtpRuntimeConfig): SmtpRuntimeConfig => ({
+  ...config,
+  port: 465,
+  secure: true,
+  requireTls: false,
+});
 
 export const sendOtpEmail = async ({
   to,
@@ -344,8 +384,7 @@ export const sendOtpEmail = async ({
   const { transporter: emailTransporter, config } = await getTransporter();
   const subject = getOtpSubjectByPurpose(purpose);
   const expiresLabel = Math.max(Number(expiresInMinutes) || 0, 1);
-
-  return emailTransporter.sendMail({
+  const mailOptions = {
     from: config.from ? `"${config.appName}" <${config.from}>` : config.user,
     to: normalizedEmail,
     subject,
@@ -360,5 +399,29 @@ export const sendOtpEmail = async ({
         <p>Ma co hieu luc trong ${expiresLabel} phut.</p>
       </div>
     `,
-  });
+  };
+
+  try {
+    return await emailTransporter.sendMail(mailOptions);
+  } catch (error) {
+    if (
+      !isGmailSmtpConfig(config)
+      || config.secure
+      || config.port === 465
+      || !isSmtpConnectionFailure(error)
+    ) {
+      throw error;
+    }
+
+    const fallbackConfig = buildGmailSslFallbackConfig(config);
+    console.warn("[OTP][SMTP] Retrying Gmail with implicit TLS", {
+      host: fallbackConfig.host,
+      port: fallbackConfig.port,
+      secure: fallbackConfig.secure,
+      addressFamily: fallbackConfig.addressFamily,
+    });
+
+    const { transporter: fallbackTransporter } = await createTransporterForConfig(fallbackConfig);
+    return fallbackTransporter.sendMail(mailOptions);
+  }
 };
