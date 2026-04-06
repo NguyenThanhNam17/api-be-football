@@ -10,6 +10,10 @@ import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import { FieldModel } from "../../models/field/field.model";
 import { FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
+import {
+  ensureTimeSlotsForOpenHours,
+  parseOpenHoursRange,
+} from "../../helper/timeSlot.helper";
 
 class FieldRoute extends BaseRoute {
   constructor() {
@@ -172,6 +176,10 @@ class FieldRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
     }
 
+    if (openHours && !parseOpenHoursRange(openHours)) {
+      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+    }
+
     const slug = name
       .toLowerCase()
       .replace(/đ/g, "d")
@@ -206,6 +214,7 @@ class FieldRoute extends BaseRoute {
     });
 
     await field.save();
+    await ensureTimeSlotsForOpenHours(openHours);
 
     return res.status(200).json({
       status: 200,
@@ -339,6 +348,10 @@ class FieldRoute extends BaseRoute {
       pricePerHour,
     } = req.body;
 
+    if (openHours && !parseOpenHoursRange(openHours)) {
+      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+    }
+
     if (name !== undefined) field.name = name;
     if (address !== undefined) field.address = address;
     if (district !== undefined) field.district = district;
@@ -355,6 +368,7 @@ class FieldRoute extends BaseRoute {
     }
 
     await field.save();
+    await ensureTimeSlotsForOpenHours(field.openHours);
 
     return res.status(200).json({
       status: 200,

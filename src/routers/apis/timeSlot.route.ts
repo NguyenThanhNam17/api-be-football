@@ -10,6 +10,7 @@ import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import { TimeSlotModel } from "../../models/TimeSlot/timeSlot.model";
 import { Types } from "mongoose";
+import { syncTimeSlotsFromStoredOpenHours } from "../../helper/timeSlot.helper";
 
 class TimeSlotRoute extends BaseRoute {
   constructor() {
@@ -105,6 +106,8 @@ class TimeSlotRoute extends BaseRoute {
   }
 
   async getAllTimeSlot(req: Request, res: Response) {
+    await syncTimeSlotsFromStoredOpenHours();
+
     const timeSlots = await TimeSlotModel.find({
       isDeleted: false,
     }).sort({ startTime: 1 });

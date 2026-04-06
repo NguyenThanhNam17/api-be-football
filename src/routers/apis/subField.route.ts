@@ -11,6 +11,10 @@ import { ROLES } from "../../constants/role.const";
 import { TypeFieldEnum } from "../../constants/model.const";
 import { FieldModel } from "../../models/field/field.model";
 import { SubFieldModel } from "../../models/subField/subField.model";
+import {
+  ensureTimeSlotsForOpenHoursList,
+  parseOpenHoursRange,
+} from "../../helper/timeSlot.helper";
 
 class SubFieldRoute extends BaseRoute {
   constructor() {
@@ -106,6 +110,10 @@ class SubFieldRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("openHours phải là string");
     }
 
+    if (openHours && !parseOpenHoursRange(openHours)) {
+      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+    }
+
     if (!Object.values(TypeFieldEnum).includes(type)) {
       throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
     }
@@ -147,6 +155,7 @@ class SubFieldRoute extends BaseRoute {
     });
 
     await subField.save();
+    await ensureTimeSlotsForOpenHoursList([openHours, field.openHours]);
 
     return res.status(200).json({
       status: 200,
@@ -302,6 +311,10 @@ class SubFieldRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
     }
 
+    if (openHours && !parseOpenHoursRange(openHours)) {
+      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+    }
+
     if (key && key !== subField.key) {
       const existed = await SubFieldModel.findOne({
         fieldId: subField.fieldId,
@@ -323,10 +336,11 @@ class SubFieldRoute extends BaseRoute {
         throw ErrorHelper.requestDataInvalid("Giá không hợp lệ");
       }
       subField.pricePerHour = pricePerHour;
-      if (openHours !== undefined) subField.openHours = openHours;
     }
+    if (openHours !== undefined) subField.openHours = openHours;
 
     await subField.save();
+    await ensureTimeSlotsForOpenHoursList([subField.openHours, field.openHours]);
 
     return res.status(200).json({
       status: 200,
