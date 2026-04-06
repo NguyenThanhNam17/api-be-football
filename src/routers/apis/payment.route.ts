@@ -144,11 +144,11 @@ const calculateOutstandingAmountForBooking = (booking: any) => {
     : Number.NaN;
   const depositStatus = String(booking?.depositStatus || "").trim().toUpperCase();
 
-  if (Number.isFinite(rawRemainingAmount)) {
-    return Math.max(rawRemainingAmount, 0);
-  }
-
   if (depositStatus === DepositStatusEnum.PAID) {
+    if (Number.isFinite(rawRemainingAmount)) {
+      return Math.max(rawRemainingAmount, 0);
+    }
+
     return Math.max(totalPrice - depositAmount, 0);
   }
 
@@ -1179,3 +1179,4 @@ class PaymentRoute extends BaseRoute {
 }
 
 export default new PaymentRoute().router;
+
