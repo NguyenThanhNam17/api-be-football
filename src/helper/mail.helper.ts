@@ -55,6 +55,8 @@ type ResendRuntimeConfig = {
   timeoutMs: number;
 };
 
+type MailProvider = "AUTO" | "SMTP" | "RESEND";
+
 let transporter: nodemailer.Transporter | null = null;
 let transporterCacheKey = "";
 
@@ -130,6 +132,16 @@ const readResendConfig = (): ResendRuntimeConfig => ({
   timeoutMs: parsePositiveNumberEnv(process.env.RESEND_TIMEOUT_MS, DEFAULT_CONNECTION_TIMEOUT_MS),
 });
 
+const readMailProviderPreference = (): MailProvider => {
+  const normalizedValue = String(process.env.MAIL_PROVIDER || "AUTO").trim().toUpperCase();
+
+  if (normalizedValue === "SMTP" || normalizedValue === "RESEND") {
+    return normalizedValue;
+  }
+
+  return "AUTO";
+};
+
 const getTransporterCacheKey = (config: SmtpRuntimeConfig) =>
   JSON.stringify({
     host: config.host,
@@ -201,6 +213,53 @@ const hasResendConfig = () => {
   return Boolean(config.apiKey && config.from);
 };
 
+const resolveActiveMailProvider = (): Exclude<MailProvider, "AUTO"> | "" => {
+  const providerPreference = readMailProviderPreference();
+  const smtpConfigured = hasSmtpConfig();
+  const resendConfigured = hasResendConfig();
+
+  if (providerPreference === "SMTP") {
+    return smtpConfigured ? "SMTP" : "";
+  }
+
+  if (providerPreference === "RESEND") {
+    return resendConfigured ? "RESEND" : "";
+  }
+
+  if (String(process.env.NODE_ENV || "").trim().toLowerCase() === "production" && resendConfigured) {
+    return "RESEND";
+  }
+
+  if (smtpConfigured) {
+    return "SMTP";
+  }
+
+  if (resendConfigured) {
+    return "RESEND";
+  }
+
+  return "";
+};
+
+const createMailProviderError = (
+  message: string,
+  {
+    code = "",
+    command = "",
+    response = "",
+  }: {
+    code?: string;
+    command?: string;
+    response?: string;
+  } = {},
+) => {
+  const error = new Error(String(message || "").trim()) as Error & MailErrorLike;
+  error.code = String(code || "").trim().toUpperCase() || undefined;
+  error.command = String(command || "").trim() || undefined;
+  error.response = String(response || "").trim() || undefined;
+  return error;
+};
+
 const isSmtpConnectionFailure = (error: unknown) => {
   const mailError = extractMailError(error);
   const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
@@ -220,22 +279,34 @@ const isSmtpConnectionFailure = (error: unknown) => {
 };
 
 export const isSmtpConfigured = () => {
-  return hasSmtpConfig() || hasResendConfig();
+  return Boolean(resolveActiveMailProvider());
 };
 
-export const getSmtpMissingConfigMessage = () =>
-  "Mail provider is not configured. Set SMTP_USER/SMTP_PASS or RESEND_API_KEY/RESEND_FROM in environment variables.";
+export const getSmtpMissingConfigMessage = () => {
+  const providerPreference = readMailProviderPreference();
+
+  if (providerPreference === "SMTP") {
+    return "Chua cau hinh SMTP. Hay set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS va SMTP_FROM tren server.";
+  }
+
+  if (providerPreference === "RESEND") {
+    return "Chua cau hinh Resend. Hay set RESEND_API_KEY va RESEND_FROM tren server.";
+  }
+
+  return "Chua cau hinh dich vu gui email. Local nen dung SMTP, con production/web nen dung Resend voi domain da verify.";
+};
 
 export const getSmtpSendFailureMessage = (error: unknown) => {
   if (!isSmtpConfigured()) {
     return getSmtpMissingConfigMessage();
   }
 
+  const activeProvider = resolveActiveMailProvider();
   const mailError = extractMailError(error);
   const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
 
   if (
-    hasResendConfig()
+    activeProvider === "RESEND"
     && messageContains(combinedMessage, [
       "resend api error",
       "resend",
@@ -245,7 +316,19 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
       "domain is not verified",
     ])
   ) {
-    return "Can not send OTP email via Resend API. Check RESEND_API_KEY and RESEND_FROM.";
+    if (messageContains(combinedMessage, ["api key is invalid", "unauthorized"])) {
+      return "RESEND_API_KEY khong hop le. Hay tao API key moi tren Resend va cap nhat lai tren server.";
+    }
+
+    if (messageContains(combinedMessage, ["you can only send testing emails to your own email address"])) {
+      return "Resend dang o che do test. Ban chi gui duoc email toi dia chi email cua tai khoan Resend. Hay verify domain tren Resend va doi RESEND_FROM sang email thuoc domain da verify.";
+    }
+
+    if (messageContains(combinedMessage, ["verify a domain", "domain is not verified"])) {
+      return "Domain gui mail tren Resend chua duoc verify. Hay verify domain trong Resend va dat RESEND_FROM bang email thuoc domain do.";
+    }
+
+    return "Khong the gui OTP qua Resend. Hay kiem tra RESEND_API_KEY, RESEND_FROM va cau hinh domain tren Resend.";
   }
 
   if (
@@ -259,7 +342,7 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
       "invalid credentials",
     ])
   ) {
-    return "SMTP authentication failed. Check SMTP_USER and SMTP_PASS. If you use Gmail, use an App Password.";
+    return "Dang nhap SMTP that bai. Hay kiem tra SMTP_USER va SMTP_PASS. Neu dung Gmail, hay dung App Password.";
   }
 
   if (
@@ -274,11 +357,11 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
       "network",
     ])
   ) {
-    if (hasResendConfig() && !hasSmtpConfig()) {
-      return "Can not send OTP email via Resend API. Check RESEND_API_KEY, RESEND_FROM, and outbound HTTPS access on hosting.";
+    if (activeProvider === "RESEND") {
+      return "Khong the ket noi Resend API. Hay kiem tra RESEND_API_KEY, RESEND_FROM va ket noi HTTPS outbound tren hosting.";
     }
 
-    return "Can not connect to SMTP server. Check SMTP_HOST, SMTP_PORT, SMTP_SECURE, and outbound network access on hosting.";
+    return "Khong the ket noi SMTP server. Hay kiem tra SMTP_HOST, SMTP_PORT, SMTP_SECURE va outbound network access tren hosting.";
   }
 
   if (
@@ -290,10 +373,10 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
       "self signed",
     ])
   ) {
-    return "SMTP TLS handshake failed. Check SMTP_SECURE and TLS settings.";
+    return "Ket noi TLS toi SMTP that bai. Hay kiem tra SMTP_SECURE va TLS settings.";
   }
 
-  return "Can not send OTP email. Check SMTP configuration on the server.";
+  return "Khong the gui OTP email. Hay kiem tra cau hinh mail tren server.";
 };
 
 export const logSmtpSendFailure = (
@@ -302,10 +385,14 @@ export const logSmtpSendFailure = (
 ) => {
   const config = readSmtpConfig();
   const resendConfig = readResendConfig();
+  const providerPreference = readMailProviderPreference();
+  const activeProvider = resolveActiveMailProvider();
   const mailError = extractMailError(error);
 
-  console.error("[OTP][SMTP] Send failed", {
+  console.error("[OTP][MAIL] Send failed", {
     ...context,
+    mailProviderPreference: providerPreference,
+    activeMailProvider: activeProvider || undefined,
     smtpConfigured: hasSmtpConfig(),
     resendConfigured: hasResendConfig(),
     resendFrom: resendConfig.from || undefined,
@@ -344,7 +431,7 @@ const resolveSmtpHost = async (config: SmtpRuntimeConfig) => {
       tlsServername: config.host,
     };
   } catch (error) {
-    console.warn("[OTP][SMTP] Host lookup fallback", {
+    console.warn("[OTP][MAIL] Host lookup fallback", {
       host: config.host,
       addressFamily: config.addressFamily,
       message: String((error as Error)?.message || error || "").trim(),
@@ -504,7 +591,14 @@ const sendOtpEmailViaResend = async ({
     return response;
   }
 
-  throw new Error(`Resend API error (${response.statusCode}): ${response.body || "unknown error"}`);
+  throw createMailProviderError(
+    `Resend API error (${response.statusCode}): ${response.body || "unknown error"}`,
+    {
+      code: `RESEND_${response.statusCode}`,
+      command: "RESEND",
+      response: response.body || "",
+    },
+  );
 };
 
 export const sendOtpEmail = async ({
@@ -529,6 +623,7 @@ export const sendOtpEmail = async ({
   const expiresLabel = Math.max(Number(expiresInMinutes) || 0, 1);
   const text = `Ma OTP cua ban la: ${normalizedOtp}. Ma co hieu luc trong ${expiresLabel} phut.`;
   const resendConfig = readResendConfig();
+  const activeProvider = resolveActiveMailProvider();
   const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5;">
         <h2 style="margin: 0 0 12px;">${resendConfig.appName}</h2>
@@ -540,13 +635,17 @@ export const sendOtpEmail = async ({
       </div>
     `;
 
-  if (hasResendConfig()) {
+  if (activeProvider === "RESEND") {
     return sendOtpEmailViaResend({
       to: normalizedEmail,
       subject,
       text,
       html,
     });
+  }
+
+  if (activeProvider !== "SMTP") {
+    throw new Error(getSmtpMissingConfigMessage());
   }
 
   const { transporter: emailTransporter, config } = await getTransporter();
@@ -571,7 +670,7 @@ export const sendOtpEmail = async ({
     }
 
     const fallbackConfig = buildGmailSslFallbackConfig(config);
-    console.warn("[OTP][SMTP] Retrying Gmail with implicit TLS", {
+    console.warn("[OTP][MAIL] Retrying Gmail with implicit TLS", {
       host: fallbackConfig.host,
       port: fallbackConfig.port,
       secure: fallbackConfig.secure,
