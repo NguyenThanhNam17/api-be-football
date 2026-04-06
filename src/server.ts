@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import path from "path";
 import { ensureBookingIndexes } from "./models/booking/booking.model";
+import { TokenHelper } from "./helper/token.helper";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config();
@@ -42,6 +43,8 @@ async function startServer() {
   if (!mongoURI) {
     throw new Error("MONGO_URI is required");
   }
+
+  TokenHelper.getTokenSecret();
 
   await connectMongoDB();
 
