@@ -8,6 +8,7 @@ const DEFAULT_CONNECTION_TIMEOUT_MS = 15000;
 const DEFAULT_GREETING_TIMEOUT_MS = 10000;
 const DEFAULT_SOCKET_TIMEOUT_MS = 20000;
 const DEFAULT_RESEND_API_URL = "https://api.resend.com/emails";
+const DEFAULT_SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send";
 
 const SMTP_CONNECTION_ERROR_CODES = new Set([
   "ECONNECTION",
@@ -55,7 +56,16 @@ type ResendRuntimeConfig = {
   timeoutMs: number;
 };
 
-type MailProvider = "AUTO" | "SMTP" | "RESEND";
+type SendGridRuntimeConfig = {
+  apiKey: string;
+  from: string;
+  replyTo: string;
+  apiUrl: string;
+  appName: string;
+  timeoutMs: number;
+};
+
+type MailProvider = "AUTO" | "SMTP" | "RESEND" | "SENDGRID";
 type MailProviderReadiness = {
   provider: Exclude<MailProvider, "AUTO">;
   verifiedAt: number;
@@ -144,10 +154,24 @@ const readResendConfig = (): ResendRuntimeConfig => ({
   timeoutMs: parsePositiveNumberEnv(process.env.RESEND_TIMEOUT_MS, DEFAULT_CONNECTION_TIMEOUT_MS),
 });
 
+const readSendGridConfig = (): SendGridRuntimeConfig => ({
+  apiKey: String(process.env.SENDGRID_API_KEY || "").trim(),
+  from: String(
+    process.env.SENDGRID_FROM
+    || process.env.SMTP_FROM
+    || process.env.SMTP_USER
+    || "",
+  ).trim(),
+  replyTo: String(process.env.SENDGRID_REPLY_TO || "").trim(),
+  apiUrl: String(process.env.SENDGRID_API_URL || DEFAULT_SENDGRID_API_URL).trim() || DEFAULT_SENDGRID_API_URL,
+  appName: String(process.env.APP_NAME || "Football Booking").trim() || "Football Booking",
+  timeoutMs: parsePositiveNumberEnv(process.env.SENDGRID_TIMEOUT_MS, DEFAULT_CONNECTION_TIMEOUT_MS),
+});
+
 const readMailProviderPreference = (): MailProvider => {
   const normalizedValue = String(process.env.MAIL_PROVIDER || "AUTO").trim().toUpperCase();
 
-  if (normalizedValue === "SMTP" || normalizedValue === "RESEND") {
+  if (normalizedValue === "SMTP" || normalizedValue === "RESEND" || normalizedValue === "SENDGRID") {
     return normalizedValue;
   }
 
@@ -225,6 +249,11 @@ const hasResendConfig = () => {
   return Boolean(config.apiKey && config.from);
 };
 
+const hasSendGridConfig = () => {
+  const config = readSendGridConfig();
+  return Boolean(config.apiKey && config.from);
+};
+
 const getMailVerificationTtlMs = () =>
   parsePositiveNumberEnv(process.env.MAIL_VERIFY_CACHE_MS, 60_000);
 
@@ -232,6 +261,7 @@ const resolveActiveMailProvider = (): Exclude<MailProvider, "AUTO"> | "" => {
   const providerPreference = readMailProviderPreference();
   const smtpConfigured = hasSmtpConfig();
   const resendConfigured = hasResendConfig();
+  const sendGridConfigured = hasSendGridConfig();
 
   if (providerPreference === "SMTP") {
     return smtpConfigured ? "SMTP" : "";
@@ -241,8 +271,16 @@ const resolveActiveMailProvider = (): Exclude<MailProvider, "AUTO"> | "" => {
     return resendConfigured ? "RESEND" : "";
   }
 
+  if (providerPreference === "SENDGRID") {
+    return sendGridConfigured ? "SENDGRID" : "";
+  }
+
   if (String(process.env.NODE_ENV || "").trim().toLowerCase() === "production" && resendConfigured) {
     return "RESEND";
+  }
+
+  if (String(process.env.NODE_ENV || "").trim().toLowerCase() === "production" && sendGridConfigured) {
+    return "SENDGRID";
   }
 
   if (smtpConfigured) {
@@ -251,6 +289,10 @@ const resolveActiveMailProvider = (): Exclude<MailProvider, "AUTO"> | "" => {
 
   if (resendConfigured) {
     return "RESEND";
+  }
+
+  if (sendGridConfigured) {
+    return "SENDGRID";
   }
 
   return "";
@@ -310,7 +352,11 @@ export const getSmtpMissingConfigMessage = () => {
     return "Chua cau hinh Resend. Hay set RESEND_API_KEY va RESEND_FROM tren server.";
   }
 
-  return "Chua cau hinh dich vu gui email. Local nen dung SMTP, con production/web nen dung Resend voi domain da verify.";
+  if (providerPreference === "SENDGRID") {
+    return "Chua cau hinh SendGrid. Hay set SENDGRID_API_KEY va SENDGRID_FROM tren server.";
+  }
+
+  return "Chua cau hinh dich vu gui email. Local nen dung SMTP, con production/web nen dung Resend hoac SendGrid voi sender da verify.";
 };
 
 export const getSmtpSendFailureMessage = (error: unknown) => {
@@ -350,6 +396,30 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
   }
 
   if (
+    activeProvider === "SENDGRID"
+    && messageContains(combinedMessage, [
+      "sendgrid",
+      "authorization grant is invalid",
+      "permission denied",
+      "api key",
+      "forbidden",
+      "sender identity",
+      "from address does not match a verified sender identity",
+      "unauthorized",
+    ])
+  ) {
+    if (messageContains(combinedMessage, ["authorization grant is invalid", "api key", "unauthorized"])) {
+      return "SENDGRID_API_KEY khong hop le. Hay tao API key moi tren SendGrid va cap nhat lai tren server.";
+    }
+
+    if (messageContains(combinedMessage, ["verified sender identity", "sender identity"])) {
+      return "SENDGRID_FROM chua duoc verify. Hay verify Single Sender hoac Domain Authentication trong SendGrid roi dat SENDGRID_FROM bang email da verify.";
+    }
+
+    return "Khong the gui OTP qua SendGrid. Hay kiem tra SENDGRID_API_KEY, SENDGRID_FROM va sender verification trong SendGrid.";
+  }
+
+  if (
     SMTP_AUTH_ERROR_CODES.has(String(mailError.code || "").toUpperCase())
     || messageContains(combinedMessage, [
       "invalid login",
@@ -377,6 +447,10 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
   ) {
     if (activeProvider === "RESEND") {
       return "Khong the ket noi Resend API. Hay kiem tra RESEND_API_KEY, RESEND_FROM va ket noi HTTPS outbound tren hosting.";
+    }
+
+    if (activeProvider === "SENDGRID") {
+      return "Khong the ket noi SendGrid API. Hay kiem tra SENDGRID_API_KEY, SENDGRID_FROM va ket noi HTTPS outbound tren hosting.";
     }
 
     if (isGmailSmtpConfig(smtpConfig)) {
@@ -407,6 +481,7 @@ export const logSmtpSendFailure = (
 ) => {
   const config = readSmtpConfig();
   const resendConfig = readResendConfig();
+  const sendGridConfig = readSendGridConfig();
   const providerPreference = readMailProviderPreference();
   const activeProvider = resolveActiveMailProvider();
   const mailError = extractMailError(error);
@@ -417,8 +492,11 @@ export const logSmtpSendFailure = (
     activeMailProvider: activeProvider || undefined,
     smtpConfigured: hasSmtpConfig(),
     resendConfigured: hasResendConfig(),
+    sendGridConfigured: hasSendGridConfig(),
     resendFrom: resendConfig.from || undefined,
     resendApiUrl: resendConfig.apiUrl || undefined,
+    sendGridFrom: sendGridConfig.from || undefined,
+    sendGridApiUrl: sendGridConfig.apiUrl || undefined,
     host: config.host,
     port: config.port,
     secure: config.secure,
@@ -623,6 +701,74 @@ const sendOtpEmailViaResend = async ({
   );
 };
 
+const sendOtpEmailViaSendGrid = async ({
+  to,
+  subject,
+  text,
+  html,
+}: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}) => {
+  const config = readSendGridConfig();
+
+  if (!config.apiKey || !config.from) {
+    throw new Error(getSmtpMissingConfigMessage());
+  }
+
+  const response = await postJsonOverHttps(
+    config.apiUrl,
+    {
+      personalizations: [
+        {
+          to: [{ email: to }],
+          subject,
+        },
+      ],
+      from: {
+        email: config.from,
+        name: config.appName,
+      },
+      content: [
+        {
+          type: "text/plain",
+          value: text,
+        },
+        {
+          type: "text/html",
+          value: html,
+        },
+      ],
+      ...(config.replyTo
+        ? {
+            reply_to: {
+              email: config.replyTo,
+            },
+          }
+        : {}),
+    },
+    {
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    config.timeoutMs,
+  );
+
+  if (response.statusCode >= 200 && response.statusCode < 300) {
+    return response;
+  }
+
+  throw createMailProviderError(
+    `SendGrid API error (${response.statusCode}): ${response.body || "unknown error"}`,
+    {
+      code: `SENDGRID_${response.statusCode}`,
+      command: "SENDGRID",
+      response: response.body || "",
+    },
+  );
+};
+
 const verifySmtpTransport = async ({
   force = false,
 }: {
@@ -760,10 +906,11 @@ export const sendOtpEmail = async ({
   const expiresLabel = Math.max(Number(expiresInMinutes) || 0, 1);
   const text = `Ma OTP cua ban la: ${normalizedOtp}. Ma co hieu luc trong ${expiresLabel} phut.`;
   const resendConfig = readResendConfig();
+  const sendGridConfig = readSendGridConfig();
   const activeProvider = resolveActiveMailProvider();
   const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5;">
-        <h2 style="margin: 0 0 12px;">${resendConfig.appName}</h2>
+        <h2 style="margin: 0 0 12px;">${resendConfig.appName || sendGridConfig.appName}</h2>
         <p>Ma OTP cua ban la:</p>
         <p style="font-size: 24px; font-weight: 700; letter-spacing: 2px; margin: 8px 0 12px;">
           ${normalizedOtp}
@@ -774,6 +921,15 @@ export const sendOtpEmail = async ({
 
   if (activeProvider === "RESEND") {
     return sendOtpEmailViaResend({
+      to: normalizedEmail,
+      subject,
+      text,
+      html,
+    });
+  }
+
+  if (activeProvider === "SENDGRID") {
+    return sendOtpEmailViaSendGrid({
       to: normalizedEmail,
       subject,
       text,
