@@ -17,6 +17,7 @@ import {
   verifyOtpCode,
 } from "../../helper/otp.helper";
 import {
+  ensureMailProviderReady,
   getSmtpMissingConfigMessage,
   getSmtpSendFailureMessage,
   isSmtpConfigured,
@@ -96,6 +97,8 @@ class UserRoute extends BaseRoute {
 
   async sendOtp(req: Request, res: Response) {
     const { email, purpose } = req.body || {};
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedPurpose = String(purpose || "auth").trim().toLowerCase();
 
     if (!email) {
       throw ErrorHelper.requestDataInvalid("email required");
@@ -103,6 +106,18 @@ class UserRoute extends BaseRoute {
 
     if (!isSmtpConfigured()) {
       throw ErrorHelper.requestDataInvalid(getSmtpMissingConfigMessage());
+    }
+
+    try {
+      await ensureMailProviderReady();
+    } catch (error) {
+      logSmtpSendFailure(error, {
+        route: "/api/user/sendOtp",
+        email: normalizedEmail,
+        purpose: normalizedPurpose,
+        phase: "provider_ready_check",
+      });
+      throw ErrorHelper.serviceUnavailable(getSmtpSendFailureMessage(error));
     }
 
     let issuedOtp: Awaited<ReturnType<typeof issueOtpCode>>;

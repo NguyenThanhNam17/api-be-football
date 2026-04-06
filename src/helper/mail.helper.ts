@@ -56,9 +56,21 @@ type ResendRuntimeConfig = {
 };
 
 type MailProvider = "AUTO" | "SMTP" | "RESEND";
+type MailProviderReadiness = {
+  provider: Exclude<MailProvider, "AUTO">;
+  verifiedAt: number;
+};
+
+type MailProviderVerificationCache = {
+  key: string;
+  verifiedAt: number;
+  error?: MailErrorLike;
+};
 
 let transporter: nodemailer.Transporter | null = null;
 let transporterCacheKey = "";
+let mailProviderReadiness: MailProviderReadiness | null = null;
+let smtpVerificationCache: MailProviderVerificationCache | null = null;
 
 const parseBooleanEnv = (value: string | undefined, fallback = false) => {
   const normalized = String(value || "").trim().toLowerCase();
@@ -213,6 +225,9 @@ const hasResendConfig = () => {
   return Boolean(config.apiKey && config.from);
 };
 
+const getMailVerificationTtlMs = () =>
+  parsePositiveNumberEnv(process.env.MAIL_VERIFY_CACHE_MS, 60_000);
+
 const resolveActiveMailProvider = (): Exclude<MailProvider, "AUTO"> | "" => {
   const providerPreference = readMailProviderPreference();
   const smtpConfigured = hasSmtpConfig();
@@ -282,6 +297,8 @@ export const isSmtpConfigured = () => {
   return Boolean(resolveActiveMailProvider());
 };
 
+export const getActiveMailProvider = () => resolveActiveMailProvider();
+
 export const getSmtpMissingConfigMessage = () => {
   const providerPreference = readMailProviderPreference();
 
@@ -302,6 +319,7 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
   }
 
   const activeProvider = resolveActiveMailProvider();
+  const smtpConfig = readSmtpConfig();
   const mailError = extractMailError(error);
   const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
 
@@ -359,6 +377,10 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
   ) {
     if (activeProvider === "RESEND") {
       return "Khong the ket noi Resend API. Hay kiem tra RESEND_API_KEY, RESEND_FROM va ket noi HTTPS outbound tren hosting.";
+    }
+
+    if (isGmailSmtpConfig(smtpConfig)) {
+      return "Khong the ket noi Gmail SMTP tu server. Neu local gui duoc nhung web bi timeout, hosting dang chan hoac khong on dinh voi outbound Gmail SMTP. Hay doi sang SMTP provider nhu Brevo, Mailgun hoac SendGrid.";
     }
 
     return "Khong the ket noi SMTP server. Hay kiem tra SMTP_HOST, SMTP_PORT, SMTP_SECURE va outbound network access tren hosting.";
@@ -599,6 +621,121 @@ const sendOtpEmailViaResend = async ({
       response: response.body || "",
     },
   );
+};
+
+const verifySmtpTransport = async ({
+  force = false,
+}: {
+  force?: boolean;
+} = {}) => {
+  const config = readSmtpConfig();
+  const ttlMs = getMailVerificationTtlMs();
+  const cacheKey = getTransporterCacheKey(config);
+
+  if (
+    !force
+    && smtpVerificationCache
+    && smtpVerificationCache.key === cacheKey
+    && Date.now() - smtpVerificationCache.verifiedAt < ttlMs
+  ) {
+    if (smtpVerificationCache.error) {
+      throw createMailProviderError(
+        smtpVerificationCache.error.message || "SMTP verification failed.",
+        {
+          code: smtpVerificationCache.error.code,
+          command: smtpVerificationCache.error.command,
+          response: smtpVerificationCache.error.response,
+        },
+      );
+    }
+
+    return;
+  }
+
+  try {
+    const { transporter: smtpTransporter } = await getTransporter();
+    await smtpTransporter.verify();
+    smtpVerificationCache = {
+      key: cacheKey,
+      verifiedAt: Date.now(),
+    };
+    return;
+  } catch (error) {
+    if (
+      isGmailSmtpConfig(config)
+      && !config.secure
+      && config.port !== 465
+      && isSmtpConnectionFailure(error)
+    ) {
+      const fallbackConfig = buildGmailSslFallbackConfig(config);
+      console.warn("[OTP][MAIL] Verifying Gmail with implicit TLS fallback", {
+        host: fallbackConfig.host,
+        port: fallbackConfig.port,
+        secure: fallbackConfig.secure,
+        addressFamily: fallbackConfig.addressFamily,
+      });
+
+      try {
+        const { transporter: fallbackTransporter } = await createTransporterForConfig(fallbackConfig, {
+          useCache: true,
+        });
+        await fallbackTransporter.verify();
+        smtpVerificationCache = {
+          key: cacheKey,
+          verifiedAt: Date.now(),
+        };
+        return;
+      } catch (fallbackError) {
+        const fallbackMailError = extractMailError(fallbackError);
+        smtpVerificationCache = {
+          key: cacheKey,
+          verifiedAt: Date.now(),
+          error: fallbackMailError,
+        };
+        throw fallbackError;
+      }
+    }
+
+    const mailError = extractMailError(error);
+    smtpVerificationCache = {
+      key: cacheKey,
+      verifiedAt: Date.now(),
+      error: mailError,
+    };
+    throw error;
+  }
+};
+
+export const ensureMailProviderReady = async ({
+  force = false,
+}: {
+  force?: boolean;
+} = {}) => {
+  const activeProvider = resolveActiveMailProvider();
+
+  if (!activeProvider) {
+    throw createMailProviderError(getSmtpMissingConfigMessage());
+  }
+
+  if (
+    !force
+    && mailProviderReadiness
+    && mailProviderReadiness.provider === activeProvider
+    && Date.now() - mailProviderReadiness.verifiedAt < getMailVerificationTtlMs()
+  ) {
+    return activeProvider;
+  }
+
+  if (activeProvider === "SMTP") {
+    await verifySmtpTransport({ force });
+  }
+
+  mailProviderReadiness = {
+    provider: activeProvider,
+    verifiedAt: Date.now(),
+  };
+
+  return activeProvider;
 };
 
 export const sendOtpEmail = async ({
