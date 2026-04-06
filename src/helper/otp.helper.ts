@@ -109,7 +109,12 @@ export const invalidateOtpCode = async (otpId: string) => {
 
   await OtpCodeModel.updateOne(
     { _id: normalizedOtpId, isUsed: false },
-    { $set: { isUsed: true } },
+    {
+      $set: {
+        isUsed: true,
+        expiresAt: new Date(),
+      },
+    },
   );
 };
 

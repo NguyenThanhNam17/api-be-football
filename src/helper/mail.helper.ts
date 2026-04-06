@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import dns from "node:dns";
 
 const DEFAULT_SMTP_HOST = "smtp.gmail.com";
 const DEFAULT_SMTP_PORT = 587;
@@ -40,6 +41,7 @@ type SmtpRuntimeConfig = {
   connectionTimeout: number;
   greetingTimeout: number;
   socketTimeout: number;
+  addressFamily: 0 | 4 | 6;
 };
 
 let transporter: nodemailer.Transporter | null = null;
@@ -58,6 +60,11 @@ const parseBooleanEnv = (value: string | undefined, fallback = false) => {
 const parsePositiveNumberEnv = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const parseAddressFamilyEnv = (value: string | undefined, fallback: 0 | 4 | 6 = 0): 0 | 4 | 6 => {
+  const parsed = Number(value);
+  return parsed === 4 || parsed === 6 ? parsed : fallback;
 };
 
 const readSmtpConfig = (): SmtpRuntimeConfig => {
@@ -91,6 +98,10 @@ const readSmtpConfig = (): SmtpRuntimeConfig => {
       process.env.SMTP_SOCKET_TIMEOUT_MS,
       DEFAULT_SOCKET_TIMEOUT_MS,
     ),
+    addressFamily: parseAddressFamilyEnv(
+      process.env.SMTP_ADDRESS_FAMILY,
+      host === DEFAULT_SMTP_HOST ? 4 : 0,
+    ),
   };
 };
 
@@ -109,6 +120,7 @@ const getTransporterCacheKey = (config: SmtpRuntimeConfig) =>
     connectionTimeout: config.connectionTimeout,
     greetingTimeout: config.greetingTimeout,
     socketTimeout: config.socketTimeout,
+    addressFamily: config.addressFamily,
   });
 
 const getOtpSubjectByPurpose = (purpose: string) => {
@@ -222,6 +234,7 @@ export const logSmtpSendFailure = (
     host: config.host,
     port: config.port,
     secure: config.secure,
+    addressFamily: config.addressFamily,
     service: config.service || undefined,
     user: config.user || undefined,
     from: config.from || undefined,
@@ -232,21 +245,55 @@ export const logSmtpSendFailure = (
   });
 };
 
-const getTransporter = () => {
+const resolveSmtpHost = async (config: SmtpRuntimeConfig) => {
+  if (!config.addressFamily) {
+    return {
+      connectionHost: config.host,
+      tlsServername: config.host,
+    };
+  }
+
+  try {
+    const lookupResult = await dns.promises.lookup(config.host, {
+      family: config.addressFamily,
+      all: false,
+      verbatim: false,
+    });
+
+    return {
+      connectionHost: String(lookupResult.address || config.host).trim() || config.host,
+      tlsServername: config.host,
+    };
+  } catch (error) {
+    console.warn("[OTP][SMTP] Host lookup fallback", {
+      host: config.host,
+      addressFamily: config.addressFamily,
+      message: String((error as Error)?.message || error || "").trim(),
+    });
+
+    return {
+      connectionHost: config.host,
+      tlsServername: config.host,
+    };
+  }
+};
+
+const getTransporter = async () => {
   const config = readSmtpConfig();
 
   if (!config.user || !config.pass) {
     throw new Error(getSmtpMissingConfigMessage());
   }
 
-  const cacheKey = getTransporterCacheKey(config);
+  const resolvedHost = await resolveSmtpHost(config);
+  const cacheKey = `${getTransporterCacheKey(config)}|${resolvedHost.connectionHost}`;
 
   if (!transporter || transporterCacheKey !== cacheKey) {
     transporterCacheKey = cacheKey;
 
     transporter = nodemailer.createTransport({
       ...(config.service ? { service: config.service } : {}),
-      host: config.host,
+      host: resolvedHost.connectionHost,
       port: config.port,
       secure: config.secure,
       requireTLS: config.requireTls,
@@ -259,13 +306,14 @@ const getTransporter = () => {
         user: config.user,
         pass: config.pass,
       },
-      ...(config.tlsRejectUnauthorized
-        ? {}
-        : {
-            tls: {
+      tls: {
+        servername: resolvedHost.tlsServername,
+        ...(config.tlsRejectUnauthorized
+          ? {}
+          : {
               rejectUnauthorized: false,
-            },
-          }),
+            }),
+      },
     });
   }
 
@@ -293,7 +341,7 @@ export const sendOtpEmail = async ({
     throw new Error("Email and OTP are required.");
   }
 
-  const { transporter: emailTransporter, config } = getTransporter();
+  const { transporter: emailTransporter, config } = await getTransporter();
   const subject = getOtpSubjectByPurpose(purpose);
   const expiresLabel = Math.max(Number(expiresInMinutes) || 0, 1);
 
