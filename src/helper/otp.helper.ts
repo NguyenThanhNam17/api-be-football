@@ -68,16 +68,6 @@ export const issueOtpCode = async ({
     throw new Error(`Please wait ${Math.max(remainSeconds, 1)}s before requesting a new OTP.`);
   }
 
-  await OtpCodeModel.updateMany(
-    {
-      email: normalizedEmail,
-      purpose: normalizedPurpose,
-      isUsed: false,
-      expiresAt: { $gt: now },
-    },
-    { $set: { isUsed: true } },
-  );
-
   const otp = createOtpCode();
   const expiresAt = new Date(now.getTime() + OTP_EXPIRES_MINUTES * 60 * 1000);
   const codeHash = buildOtpHash(normalizedEmail, normalizedPurpose, otp);
@@ -88,7 +78,7 @@ export const issueOtpCode = async ({
     codeHash,
     expiresAt,
     attempts: 0,
-    isUsed: false,
+    isUsed: true,
   });
 
   return {
@@ -99,6 +89,50 @@ export const issueOtpCode = async ({
     purpose: normalizedPurpose,
     email: normalizedEmail,
   };
+};
+
+export const activateIssuedOtpCode = async ({
+  otpId,
+  email,
+  purpose = "auth",
+}: {
+  otpId: string;
+  email: string;
+  purpose?: string;
+}) => {
+  const normalizedOtpId = String(otpId || "").trim();
+  const normalizedEmail = normalizeOtpEmail(email);
+  const normalizedPurpose = normalizeOtpPurpose(purpose);
+  const now = new Date();
+
+  if (!normalizedOtpId || !normalizedEmail) {
+    return;
+  }
+
+  await OtpCodeModel.updateMany(
+    {
+      _id: { $ne: normalizedOtpId },
+      email: normalizedEmail,
+      purpose: normalizedPurpose,
+      isUsed: false,
+      expiresAt: { $gt: now },
+    },
+    {
+      $set: {
+        isUsed: true,
+        expiresAt: now,
+      },
+    },
+  );
+
+  await OtpCodeModel.updateOne(
+    { _id: normalizedOtpId },
+    {
+      $set: {
+        isUsed: false,
+      },
+    },
+  );
 };
 
 export const invalidateOtpCode = async (otpId: string) => {

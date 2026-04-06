@@ -11,6 +11,7 @@ import { TokenHelper } from "../../helper/token.helper";
 import { UserHelper } from "../../models/user/user.helper";
 import { ROLES } from "../../constants/role.const";
 import {
+  activateIssuedOtpCode,
   invalidateOtpCode,
   issueOtpCode,
   verifyOtpCode,
@@ -123,6 +124,11 @@ class UserRoute extends BaseRoute {
         otp: issuedOtp.otp,
         purpose: issuedOtp.purpose,
         expiresInMinutes: issuedOtp.expiresInMinutes,
+      });
+      await activateIssuedOtpCode({
+        otpId: issuedOtp.otpId,
+        email: issuedOtp.email,
+        purpose: issuedOtp.purpose,
       });
     } catch (error) {
       await invalidateOtpCode(issuedOtp.otpId);

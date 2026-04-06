@@ -1,11 +1,13 @@
 import nodemailer from "nodemailer";
 import dns from "node:dns";
+import https from "node:https";
 
 const DEFAULT_SMTP_HOST = "smtp.gmail.com";
 const DEFAULT_SMTP_PORT = 587;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 15000;
 const DEFAULT_GREETING_TIMEOUT_MS = 10000;
 const DEFAULT_SOCKET_TIMEOUT_MS = 20000;
+const DEFAULT_RESEND_API_URL = "https://api.resend.com/emails";
 
 const SMTP_CONNECTION_ERROR_CODES = new Set([
   "ECONNECTION",
@@ -42,6 +44,15 @@ type SmtpRuntimeConfig = {
   greetingTimeout: number;
   socketTimeout: number;
   addressFamily: 0 | 4 | 6;
+};
+
+type ResendRuntimeConfig = {
+  apiKey: string;
+  from: string;
+  replyTo: string;
+  apiUrl: string;
+  appName: string;
+  timeoutMs: number;
 };
 
 let transporter: nodemailer.Transporter | null = null;
@@ -105,6 +116,20 @@ const readSmtpConfig = (): SmtpRuntimeConfig => {
   };
 };
 
+const readResendConfig = (): ResendRuntimeConfig => ({
+  apiKey: String(process.env.RESEND_API_KEY || "").trim(),
+  from: String(
+    process.env.RESEND_FROM
+    || process.env.SMTP_FROM
+    || process.env.SMTP_USER
+    || "",
+  ).trim(),
+  replyTo: String(process.env.RESEND_REPLY_TO || "").trim(),
+  apiUrl: String(process.env.RESEND_API_URL || DEFAULT_RESEND_API_URL).trim() || DEFAULT_RESEND_API_URL,
+  appName: String(process.env.APP_NAME || "Football Booking").trim() || "Football Booking",
+  timeoutMs: parsePositiveNumberEnv(process.env.RESEND_TIMEOUT_MS, DEFAULT_CONNECTION_TIMEOUT_MS),
+});
+
 const getTransporterCacheKey = (config: SmtpRuntimeConfig) =>
   JSON.stringify({
     host: config.host,
@@ -166,6 +191,16 @@ const isGmailSmtpConfig = (config: SmtpRuntimeConfig) =>
   String(config.service || "").trim().toLowerCase() === "gmail"
   || String(config.host || "").trim().toLowerCase() === DEFAULT_SMTP_HOST;
 
+const hasSmtpConfig = () => {
+  const config = readSmtpConfig();
+  return Boolean(config.user && config.pass);
+};
+
+const hasResendConfig = () => {
+  const config = readResendConfig();
+  return Boolean(config.apiKey && config.from);
+};
+
 const isSmtpConnectionFailure = (error: unknown) => {
   const mailError = extractMailError(error);
   const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
@@ -185,12 +220,11 @@ const isSmtpConnectionFailure = (error: unknown) => {
 };
 
 export const isSmtpConfigured = () => {
-  const config = readSmtpConfig();
-  return Boolean(config.user && config.pass);
+  return hasSmtpConfig() || hasResendConfig();
 };
 
 export const getSmtpMissingConfigMessage = () =>
-  "SMTP is not configured. Please set SMTP_USER and SMTP_PASS in environment variables.";
+  "Mail provider is not configured. Set SMTP_USER/SMTP_PASS or RESEND_API_KEY/RESEND_FROM in environment variables.";
 
 export const getSmtpSendFailureMessage = (error: unknown) => {
   if (!isSmtpConfigured()) {
@@ -199,6 +233,20 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
 
   const mailError = extractMailError(error);
   const combinedMessage = [mailError.message, mailError.response].filter(Boolean).join(" ");
+
+  if (
+    hasResendConfig()
+    && messageContains(combinedMessage, [
+      "resend api error",
+      "resend",
+      "invalid api key",
+      "unauthorized",
+      "forbidden",
+      "domain is not verified",
+    ])
+  ) {
+    return "Can not send OTP email via Resend API. Check RESEND_API_KEY and RESEND_FROM.";
+  }
 
   if (
     SMTP_AUTH_ERROR_CODES.has(String(mailError.code || "").toUpperCase())
@@ -226,6 +274,10 @@ export const getSmtpSendFailureMessage = (error: unknown) => {
       "network",
     ])
   ) {
+    if (hasResendConfig() && !hasSmtpConfig()) {
+      return "Can not send OTP email via Resend API. Check RESEND_API_KEY, RESEND_FROM, and outbound HTTPS access on hosting.";
+    }
+
     return "Can not connect to SMTP server. Check SMTP_HOST, SMTP_PORT, SMTP_SECURE, and outbound network access on hosting.";
   }
 
@@ -249,10 +301,15 @@ export const logSmtpSendFailure = (
   context: Record<string, string | number | boolean | undefined> = {},
 ) => {
   const config = readSmtpConfig();
+  const resendConfig = readResendConfig();
   const mailError = extractMailError(error);
 
   console.error("[OTP][SMTP] Send failed", {
     ...context,
+    smtpConfigured: hasSmtpConfig(),
+    resendConfigured: hasResendConfig(),
+    resendFrom: resendConfig.from || undefined,
+    resendApiUrl: resendConfig.apiUrl || undefined,
     host: config.host,
     port: config.port,
     secure: config.secure,
@@ -363,6 +420,93 @@ const buildGmailSslFallbackConfig = (config: SmtpRuntimeConfig): SmtpRuntimeConf
   requireTls: false,
 });
 
+const postJsonOverHttps = (
+  urlValue: string,
+  payload: Record<string, any>,
+  headers: Record<string, string>,
+  timeoutMs: number,
+) =>
+  new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+    const requestUrl = new URL(urlValue);
+    const body = JSON.stringify(payload);
+    const request = https.request(
+      {
+        protocol: requestUrl.protocol,
+        hostname: requestUrl.hostname,
+        port: requestUrl.port || 443,
+        path: `${requestUrl.pathname}${requestUrl.search}`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body).toString(),
+          ...headers,
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+
+        response.on("data", (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+
+        response.on("end", () => {
+          resolve({
+            statusCode: Number(response.statusCode || 0),
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("Connection timeout"));
+    });
+
+    request.on("error", reject);
+    request.write(body);
+    request.end();
+  });
+
+const sendOtpEmailViaResend = async ({
+  to,
+  subject,
+  text,
+  html,
+}: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}) => {
+  const config = readResendConfig();
+
+  if (!config.apiKey || !config.from) {
+    throw new Error(getSmtpMissingConfigMessage());
+  }
+
+  const response = await postJsonOverHttps(
+    config.apiUrl,
+    {
+      from: config.from,
+      to: [to],
+      subject,
+      text,
+      html,
+      ...(config.replyTo ? { reply_to: config.replyTo } : {}),
+    },
+    {
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    config.timeoutMs,
+  );
+
+  if (response.statusCode >= 200 && response.statusCode < 300) {
+    return response;
+  }
+
+  throw new Error(`Resend API error (${response.statusCode}): ${response.body || "unknown error"}`);
+};
+
 export const sendOtpEmail = async ({
   to,
   otp,
@@ -381,24 +525,37 @@ export const sendOtpEmail = async ({
     throw new Error("Email and OTP are required.");
   }
 
-  const { transporter: emailTransporter, config } = await getTransporter();
   const subject = getOtpSubjectByPurpose(purpose);
   const expiresLabel = Math.max(Number(expiresInMinutes) || 0, 1);
-  const mailOptions = {
-    from: config.from ? `"${config.appName}" <${config.from}>` : config.user,
-    to: normalizedEmail,
-    subject,
-    text: `Ma OTP cua ban la: ${normalizedOtp}. Ma co hieu luc trong ${expiresLabel} phut.`,
-    html: `
+  const text = `Ma OTP cua ban la: ${normalizedOtp}. Ma co hieu luc trong ${expiresLabel} phut.`;
+  const resendConfig = readResendConfig();
+  const html = `
       <div style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5;">
-        <h2 style="margin: 0 0 12px;">${config.appName}</h2>
+        <h2 style="margin: 0 0 12px;">${resendConfig.appName}</h2>
         <p>Ma OTP cua ban la:</p>
         <p style="font-size: 24px; font-weight: 700; letter-spacing: 2px; margin: 8px 0 12px;">
           ${normalizedOtp}
         </p>
         <p>Ma co hieu luc trong ${expiresLabel} phut.</p>
       </div>
-    `,
+    `;
+
+  if (hasResendConfig()) {
+    return sendOtpEmailViaResend({
+      to: normalizedEmail,
+      subject,
+      text,
+      html,
+    });
+  }
+
+  const { transporter: emailTransporter, config } = await getTransporter();
+  const mailOptions = {
+    from: config.from ? `"${config.appName}" <${config.from}>` : config.user,
+    to: normalizedEmail,
+    subject,
+    text,
+    html,
   };
 
   try {
