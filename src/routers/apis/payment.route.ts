@@ -9,7 +9,6 @@ import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import * as crypto from "crypto";
-import * as https from "https";
 import { PaymentModel } from "../../models/Payment/payment.model";
 import { QRCodeModel } from "../../models/qr/qr.model";
 import { BookingModel } from "../../models/booking/booking.model";
@@ -198,47 +197,37 @@ const createHmacSha256 = (data: string, secretKey: string) =>
   crypto.createHmac("sha256", secretKey).update(data).digest("hex");
 
 const postJson = async (url: string, payload: Record<string, any>) => {
-  const body = JSON.stringify(payload);
-  const parsedUrl = new URL(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
 
-  return new Promise<any>((resolve, reject) => {
-    const request = https.request(
-      {
-        protocol: parsedUrl.protocol,
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port ? Number(parsedUrl.port) : undefined,
-        path: `${parsedUrl.pathname}${parsedUrl.search}`,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json; charset=UTF-8",
-          "Content-Length": Buffer.byteLength(body),
-        },
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=UTF-8",
       },
-      (response) => {
-        let rawData = "";
-
-        response.on("data", (chunk) => {
-          rawData += String(chunk || "");
-        });
-
-        response.on("end", () => {
-          try {
-            const parsedData = rawData ? JSON.parse(rawData) : {};
-            resolve(parsedData);
-          } catch (error) {
-            reject(error);
-          }
-        });
-      },
-    );
-
-    request.setTimeout(30000, () => {
-      request.destroy(new Error("MoMo request timeout"));
+      body: JSON.stringify(payload),
+      signal: controller.signal,
     });
-    request.on("error", reject);
-    request.write(body);
-    request.end();
-  });
+
+    const rawData = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        rawData || `MoMo request failed with status ${response.status}`,
+      );
+    }
+
+    return rawData ? JSON.parse(rawData) : {};
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error("MoMo request timeout");
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 const buildMomoCreateSignature = (params: {
@@ -626,10 +615,6 @@ class PaymentRoute extends BaseRoute {
 
     if (!targetBookingIds.length || !normalizedMethod) {
       throw ErrorHelper.requestDataInvalid("Thieu du lieu bookingId/bookingIds hoac phuong thuc");
-    }
-
-    if (normalizedMethod === PaymentMethodEnum.MOMO) {
-      throw ErrorHelper.forbidden("Phuong thuc thanh toan MoMo da duoc go bo.");
     }
 
     let bookings = await BookingModel.find({
