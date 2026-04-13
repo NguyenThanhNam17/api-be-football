@@ -141,7 +141,7 @@ class FieldRoute extends BaseRoute {
 
     const fields = await FieldModel.find(query).populate(
       "ownerUserId",
-      "name phone",
+      "name email phone",
     );
 
     return res.status(200).json({
@@ -237,7 +237,7 @@ class FieldRoute extends BaseRoute {
       _id: id,
       isDeleted: false,
       status: FieldStatusEnum.APPROVED,
-    }).populate("ownerUserId", "name phone");
+    }).populate("ownerUserId", "name email phone");
 
     if (!field) {
       throw ErrorHelper.forbidden("Không tìm thấy sân");
@@ -293,7 +293,7 @@ class FieldRoute extends BaseRoute {
     const field = await FieldModel.findOne({
       _id: id,
       isDeleted: false,
-    }).populate("ownerUserId", "name phone");
+    }).populate("ownerUserId", "name email phone");
 
     if (!field) {
       throw ErrorHelper.forbidden("Không tìm thấy sân");
