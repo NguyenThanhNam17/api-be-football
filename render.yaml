@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: api-be-football
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: MONGO_URI
+        sync: false
+      - key: SECRET
+        sync: false
+    disks:
+      - name: uploads
+        mountPath: /var/data/uploads

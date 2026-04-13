@@ -1,13 +1,13 @@
 import { Router, Request, Response } from "express";
 import multer, { StorageEngine } from "multer";
-import fs from "fs";
+import {
+  buildStoredUploadFileName,
+  ensureUploadDirectory,
+  getRequestOrigin,
+  UPLOAD_PUBLIC_PATH,
+} from "../../helper/upload.helper";
 
 const router = Router();
-
-const uploadDir = "uploads";
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-}
 
 const storage: StorageEngine = multer.diskStorage({
   destination: function (
@@ -15,14 +15,14 @@ const storage: StorageEngine = multer.diskStorage({
     file: Express.Multer.File,
     cb: Function
   ) {
-    cb(null, "uploads/");
+    cb(null, ensureUploadDirectory());
   },
   filename: function (
     req: Request,
     file: Express.Multer.File,
     cb: Function
   ) {
-    const uniqueName = Date.now() + "-" + file.originalname;
+    const uniqueName = buildStoredUploadFileName(file.originalname);
     cb(null, uniqueName);
   },
 });
@@ -42,7 +42,12 @@ router.post(
         });
       }
 
-      const url = `${req.protocol}://${req.get("host")}/uploads/${file.filename}`;
+      const origin = getRequestOrigin(
+        req.get("x-forwarded-host") || req.get("host") || "",
+        req.get("x-forwarded-proto") || "",
+        req.protocol
+      );
+      const url = `${origin}${UPLOAD_PUBLIC_PATH}/${file.filename}`;
 
       return res.json({
         url,

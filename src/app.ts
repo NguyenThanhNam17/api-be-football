@@ -1,13 +1,15 @@
 import express from "express";
 import router from "./routers";
 import cors from "cors";
-import path from "path";
 import cron from "node-cron";
 import { autoCancelBooking } from "./jobs/booking.job";
+import { ensureUploadDirectory, UPLOAD_PUBLIC_PATH } from "./helper/upload.helper";
 
 
 const app = express();
 app.locals.isMongoConnected = () => false;
+app.set("trust proxy", 1);
+const uploadDirectory = ensureUploadDirectory();
 
 app.use(
   cors({
@@ -33,8 +35,7 @@ cron.schedule("* * * * *", async () => {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static("uploads"));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(UPLOAD_PUBLIC_PATH, express.static(uploadDirectory));
 
 
 app.get("/", (req, res) => {
