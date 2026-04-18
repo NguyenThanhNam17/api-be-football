@@ -24,6 +24,15 @@ import {
   logSmtpSendFailure,
   sendOtpEmail,
 } from "../../helper/mail.helper";
+import { BookingModel } from "../../models/booking/booking.model";
+import { FieldModel } from "../../models/field/field.model";
+import {
+  BookingStatusEnum,
+  DepositStatusEnum,
+} from "../../constants/model.const";
+import { TimeSlotModel } from "../../models/TimeSlot/timeSlot.model";
+import { Types } from "mongoose";
+import { SubFieldModel } from "../../models/subField/subField.model";
 
 class UserRoute extends BaseRoute {
   constructor() {
@@ -82,8 +91,8 @@ class UserRoute extends BaseRoute {
       [this.authentication],
       this.route(this.rejectOwner),
     );
-    this.router.delete(
-      "/deleteUserByAdmin/:userId",
+    this.router.post(
+      "/deleteUserByAdmin",
       [this.authentication],
       this.route(this.deleteUserByAdmin),
     );
@@ -97,8 +106,12 @@ class UserRoute extends BaseRoute {
 
   async sendOtp(req: Request, res: Response) {
     const { email, purpose } = req.body || {};
-    const normalizedEmail = String(email || "").trim().toLowerCase();
-    const normalizedPurpose = String(purpose || "auth").trim().toLowerCase();
+    const normalizedEmail = String(email || "")
+      .trim()
+      .toLowerCase();
+    const normalizedPurpose = String(purpose || "auth")
+      .trim()
+      .toLowerCase();
 
     if (!email) {
       throw ErrorHelper.requestDataInvalid("email required");
@@ -182,7 +195,9 @@ class UserRoute extends BaseRoute {
     });
 
     if (!verification.isValid) {
-      throw ErrorHelper.requestDataInvalid(verification.message || "OTP invalid");
+      throw ErrorHelper.requestDataInvalid(
+        verification.message || "OTP invalid",
+      );
     }
 
     return res.status(200).json({
@@ -190,8 +205,12 @@ class UserRoute extends BaseRoute {
       code: "200",
       message: "success",
       data: {
-        email: String(email || "").trim().toLowerCase(),
-        purpose: String(purpose || "auth").trim().toLowerCase(),
+        email: String(email || "")
+          .trim()
+          .toLowerCase(),
+        purpose: String(purpose || "auth")
+          .trim()
+          .toLowerCase(),
         verified: true,
       },
     });
@@ -377,7 +396,8 @@ class UserRoute extends BaseRoute {
     if (!user) {
       throw ErrorHelper.userNotExist();
     }
-    await UserModel.deleteOne({ _id: userId });
+    user.isDeleted = true;
+    await user.save();
     return res.status(200).json({
       status: 200,
       code: "200",
@@ -545,14 +565,21 @@ class UserRoute extends BaseRoute {
       data: { user },
     });
   }
+
   async deleteUserByAdmin(req: Request, res: Response) {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
 
-    const { userId } = req.params;
+    const { userId } = req.body;
 
-    const user = await UserModel.findById(userId);
+    if (!userId || !Types.ObjectId.isValid(userId as string)) {
+      throw ErrorHelper.requestDataInvalid("userId không hợp lệ");
+    }
+
+    const userObjectId = new Types.ObjectId(userId as string);
+
+    const user = await UserModel.findById(userObjectId);
 
     if (!user) {
       throw ErrorHelper.userNotExist();
@@ -563,13 +590,77 @@ class UserRoute extends BaseRoute {
     }
 
     user.isDeleted = true;
-
     await user.save();
+
+    const fields = await FieldModel.find({
+      ownerUserId: userObjectId,
+      isDeleted: false,
+    });
+
+    const fieldIds = fields.map((f) => f._id);
+
+    const hasPaidBooking = await BookingModel.findOne({
+      fieldId: { $in: fieldIds },
+      isDeleted: false,
+      depositStatus: DepositStatusEnum.PAID,
+      status: { $ne: BookingStatusEnum.COMPLETED },
+    });
+
+    if (hasPaidBooking) {
+      throw ErrorHelper.requestDataInvalid(
+        "Không thể xoá owner vì có booking đã được đặt cọc",
+      );
+    }
+
+    if (fieldIds.length > 0) {
+      const bookings = await BookingModel.find({
+        fieldId: { $in: fieldIds },
+        isDeleted: false,
+      });
+
+      const now = new Date();
+
+      for (const booking of bookings) {
+        const bookingDate = new Date(booking.date);
+
+        // ⚠️ Lấy timeslot
+        const timeSlot = await TimeSlotModel.findById(booking.timeSlotId);
+
+        const startTime = timeSlot?.startTime || "00:00";
+        const [hour, minute] = startTime.split(":").map(Number);
+
+        const bookingStartTime = new Date(bookingDate);
+        bookingStartTime.setHours(hour, minute, 0, 0);
+
+        if (bookingStartTime > now) {
+          booking.status = BookingStatusEnum.CANCELLED;
+          booking.cancelReason = "Tài khoản chủ sân đã bị xoá";
+
+          await booking.save();
+          continue;
+        }
+
+        booking.status = BookingStatusEnum.COMPLETED;
+        booking.cancelReason = "Chủ sân bị xoá trong khi đang sử dụng";
+
+        await booking.save();
+      }
+    }
+
+    await FieldModel.updateMany(
+      { ownerUserId: userObjectId },
+      { isDeleted: true },
+    );
+
+    await SubFieldModel.updateMany(
+      { fieldId: { $in: fieldIds } },
+      { isDeleted: true },
+    );
 
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "success",
+      message: "Xoá user thành công",
     });
   }
 

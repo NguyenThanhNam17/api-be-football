@@ -22,6 +22,8 @@ export type IBooking = BaseDocument & {
   depositMethod?: string;
   expiredAt?: Date;
   isDeleted?: boolean;
+  cancelReason?: string;
+  isRefunded?: boolean;
 };
 
 const bookingSchema = new mongoose.Schema(
@@ -80,6 +82,11 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
     },
 
+    isRefunded: {
+      type: Boolean,
+      default: false,
+    },
+
     status: {
       type: String,
       enum: Object.values(BookingStatusEnum),
@@ -107,6 +114,10 @@ const bookingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    cancelReason: {
+      type: String,
+      trim: true,
+    },
     expiredAt: {
       type: Date,
     },
@@ -122,7 +133,7 @@ bookingSchema.index(
       isDeleted: false,
       status: { $in: ["PENDING", "CONFIRMED"] },
     },
-  }
+  },
 );
 
 const BookingModel = mongoose.model<IBooking>("Booking", bookingSchema);
@@ -148,7 +159,10 @@ export const ensureBookingIndexes = async () => {
     (index) => index?.name === BOOKING_SLOT_UNIQUE_INDEX_NAME,
   );
 
-  if (bookingSlotIndex && hasExpectedActiveSlotPartialFilter(bookingSlotIndex.partialFilterExpression)) {
+  if (
+    bookingSlotIndex &&
+    hasExpectedActiveSlotPartialFilter(bookingSlotIndex.partialFilterExpression)
+  ) {
     return;
   }
 

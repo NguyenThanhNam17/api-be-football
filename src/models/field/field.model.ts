@@ -1,6 +1,7 @@
 import mongoose, { Schema } from "mongoose";
 import { BaseDocument } from "../../base/baseModel";
 import { FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
+import { Types } from "mongoose";
 
 export type IField = BaseDocument & {
   name?: string;
@@ -11,7 +12,7 @@ export type IField = BaseDocument & {
   coverImage?: string;
   article?: string;
   images?: string[];
-  ownerUserId?: Schema.Types.ObjectId;
+  ownerUserId?: Types.ObjectId;
   ownerFullName?: string;
   managedByAdmin?: boolean;
   status?: FieldStatusEnum;
