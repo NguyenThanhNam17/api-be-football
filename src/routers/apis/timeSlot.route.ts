@@ -85,7 +85,6 @@ class TimeSlotRoute extends BaseRoute {
     const existed = await TimeSlotModel.findOne({
       startTime,
       endTime,
-      isDeleted: false,
     });
 
     if (existed) {
@@ -109,9 +108,7 @@ class TimeSlotRoute extends BaseRoute {
     await syncTimeSlotsFromStoredOpenHours();
 
     const timeSlots = await TimeSlotModel.find({
-      isDeleted: false,
-    }).sort({ startTime: 1 });
-
+    })
     return res.status(200).json({
       status: 200,
       code: "200",
@@ -124,7 +121,6 @@ class TimeSlotRoute extends BaseRoute {
     let { id } = req.params;
     const timeSlot = await TimeSlotModel.findOne({
       _id: id,
-      isDeleted: false,
     });
     if (!timeSlot) {
       throw ErrorHelper.forbidden("TimeSlot không tồn tại");
@@ -146,7 +142,6 @@ class TimeSlotRoute extends BaseRoute {
     let { id } = req.params;
     const timeSlot = await TimeSlotModel.findOne({
       _id: id,
-      isDeleted: false,
     });
 
     if (!timeSlot) {
@@ -187,7 +182,6 @@ class TimeSlotRoute extends BaseRoute {
 
     const timeSlot = await TimeSlotModel.findOne({
       _id: id,
-      isDeleted: false,
     });
 
     if (!timeSlot) {
@@ -208,7 +202,6 @@ class TimeSlotRoute extends BaseRoute {
       startTime: newStart,
       endTime: newEnd,
       _id: { $ne: new Types.ObjectId(id) },
-      isDeleted: false,
     });
 
     if (existed) {
