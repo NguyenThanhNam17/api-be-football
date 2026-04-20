@@ -39,6 +39,16 @@ class FieldRoute extends BaseRoute {
       this.route(this.deleteField),
     );
     this.router.get(
+      "/getAllFieldForAdmin",
+      [this.authentication],
+      this.route(this.getAllFieldForAdmin),
+    );
+     this.router.get(
+      "/getAllFieldForOwner",
+      [this.authentication],
+      this.route(this.getAllFieldForOwner),
+    );
+    this.router.get(
       "/getFieldDetail/:id",
       [this.authentication],
       this.route(this.getFieldDetail),
@@ -145,90 +155,109 @@ class FieldRoute extends BaseRoute {
     });
   }
 
- async createField(req: Request, res: Response) {
-  const {
-    name,
-    address,
-    district,
-    coverImage,
-    article,
-    images,
-    managedByAdmin,
-    type,
-    openHours,
-    pricePerHour,
-  } = req.body;
+  async getAllFieldForAdmin(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
 
-  if (!name || !address || !district) {
-    throw ErrorHelper.requestDataInvalid("name, address, district required");
+    let fields = await FieldModel.find({});
+    if (!fields) {
+      throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
+    }
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { fields },
+    });
   }
 
-  if (type && !Object.values(TypeFieldEnum).includes(type)) {
-    throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
+  async createField(req: Request, res: Response) {
+    const {
+      name,
+      address,
+      district,
+      coverImage,
+      article,
+      images,
+      managedByAdmin,
+      type,
+      openHours,
+      pricePerHour,
+    } = req.body;
+
+    if (!name || !address || !district) {
+      throw ErrorHelper.requestDataInvalid("name, address, district required");
+    }
+
+    if (type && !Object.values(TypeFieldEnum).includes(type)) {
+      throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
+    }
+
+    if (openHours && !parseOpenHoursRange(openHours)) {
+      throw ErrorHelper.requestDataInvalid(
+        "Giờ mở cửa phải đúng định dạng HH:mm-HH:mm",
+      );
+    }
+
+    const slug = name
+      .toLowerCase()
+      .replace(/đ/g, "d")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, "-");
+
+    // 🔥 normalize address để tránh "đường A" vs "Đường A "
+    const normalizedAddress = address.trim().toLowerCase();
+    const normalizedDistrict = district.trim().toLowerCase();
+
+    // 🔥 check trùng địa chỉ + quận
+    const existedAddress = await FieldModel.findOne({
+      address: { $regex: `^${normalizedAddress}$`, $options: "i" },
+      district: { $regex: `^${normalizedDistrict}$`, $options: "i" },
+      isDeleted: false,
+    });
+
+    if (existedAddress) {
+      throw ErrorHelper.requestDataInvalid("Địa chỉ sân đã tồn tại");
+    }
+
+    // (optional) vẫn giữ check slug nếu muốn
+    const existedSlug = await FieldModel.findOne({ slug });
+    if (existedSlug) {
+      throw ErrorHelper.requestDataInvalid("Tên sân đã tồn tại");
+    }
+
+    const field = new FieldModel({
+      name,
+      slug,
+      address: normalizedAddress,
+      district: normalizedDistrict,
+      rating: 0,
+      coverImage,
+      article,
+      images,
+      type,
+      openHours,
+      pricePerHour,
+      ownerUserId: req.tokenInfo._id,
+      ownerFullName: req.tokenInfo.name,
+      managedByAdmin: managedByAdmin || false,
+      status: FieldStatusEnum.PENDING,
+    });
+
+    await field.save();
+    await ensureTimeSlotsForOpenHours(openHours);
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "Tạo sân thành công",
+      data: {
+        field,
+      },
+    });
   }
-
-  if (openHours && !parseOpenHoursRange(openHours)) {
-    throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
-  }
-
-  const slug = name
-    .toLowerCase()
-    .replace(/đ/g, "d")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, "-");
-
-  // 🔥 normalize address để tránh "đường A" vs "Đường A "
-  const normalizedAddress = address.trim().toLowerCase();
-  const normalizedDistrict = district.trim().toLowerCase();
-
-  // 🔥 check trùng địa chỉ + quận
-  const existedAddress = await FieldModel.findOne({
-    address: { $regex: `^${normalizedAddress}$`, $options: "i" },
-    district: { $regex: `^${normalizedDistrict}$`, $options: "i" },
-    isDeleted: false,
-  });
-
-  if (existedAddress) {
-    throw ErrorHelper.requestDataInvalid("Địa chỉ sân đã tồn tại");
-  }
-
-  // (optional) vẫn giữ check slug nếu muốn
-  const existedSlug = await FieldModel.findOne({ slug });
-  if (existedSlug) {
-    throw ErrorHelper.requestDataInvalid("Tên sân đã tồn tại");
-  }
-
-  const field = new FieldModel({
-    name,
-    slug,
-    address: normalizedAddress,
-    district: normalizedDistrict,
-    rating: 0,
-    coverImage,
-    article,
-    images,
-    type,
-    openHours,
-    pricePerHour,
-    ownerUserId: req.tokenInfo._id,
-    ownerFullName: req.tokenInfo.name,
-    managedByAdmin: managedByAdmin || false,
-    status: FieldStatusEnum.PENDING,
-  });
-
-  await field.save();
-  await ensureTimeSlotsForOpenHours(openHours);
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "Tạo sân thành công",
-    data: {
-      field,
-    },
-  });
-}
 
   async getField(req: Request, res: Response) {
     const { id } = req.params;
@@ -317,6 +346,27 @@ class FieldRoute extends BaseRoute {
       },
     });
   }
+
+async getAllFieldForOwner(req: Request, res: Response) {
+  if (req.tokenInfo.role_ !== ROLES.OWNER) {
+    throw ErrorHelper.permissionDeny();
+  }
+
+  let fields = await FieldModel.find({
+    ownerUserId: req.tokenInfo._id,
+  });
+
+  if (!fields || fields.length === 0) {
+    throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
+  }
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: { fields },
+  });
+}
 
   async getFieldDetail(req: Request, res: Response) {
     const { id } = req.params;
