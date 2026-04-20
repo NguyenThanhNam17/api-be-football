@@ -9,7 +9,11 @@ import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import { FieldModel } from "../../models/field/field.model";
-import { BookingStatusEnum, FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
+import {
+  BookingStatusEnum,
+  FieldStatusEnum,
+  TypeFieldEnum,
+} from "../../constants/model.const";
 import {
   ensureTimeSlotsForOpenHours,
   parseOpenHoursRange,
@@ -127,91 +131,104 @@ class FieldRoute extends BaseRoute {
   }
 
   async getAllField(req: Request, res: Response) {
-   let fields = await FieldModel.find({
+    let fields = await FieldModel.find({
       status: FieldStatusEnum.APPROVED,
-   });
-   if(!fields) {
-    throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
-   }
-   return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data: {fields},
-   });  
-   
-  }
-
-  async createField(req: Request, res: Response) {
-    const {
-      name,
-      address,
-      district,
-      coverImage,
-      article,
-      images,
-      managedByAdmin,
-      type,
-      openHours,
-      pricePerHour,
-    } = req.body;
-
-    if (!name || !address || !district) {
-      throw ErrorHelper.requestDataInvalid("name, address, district required");
-    }
-
-    if (type && !Object.values(TypeFieldEnum).includes(type)) {
-      throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
-    }
-
-    if (openHours && !parseOpenHoursRange(openHours)) {
-      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
-    }
-
-    const slug = name
-      .toLowerCase()
-      .replace(/đ/g, "d")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, "-");
-
-    // kiểm tra slug trùng
-    const existed = await FieldModel.findOne({ slug });
-
-    if (existed) {
-      throw ErrorHelper.requestDataInvalid("field already exists");
-    }
-
-    const field = new FieldModel({
-      name,
-      slug,
-      address,
-      district,
-      rating: 0,
-      coverImage,
-      article,
-      images,
-      type,
-      openHours,
-      pricePerHour,
-      ownerUserId: req.tokenInfo._id,
-      ownerFullName: req.tokenInfo.name,
-      managedByAdmin: managedByAdmin || false,
-      status: FieldStatusEnum.PENDING,
     });
-
-    await field.save();
-    await ensureTimeSlotsForOpenHours(openHours);
-
+    if (!fields) {
+      throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
+    }
     return res.status(200).json({
       status: 200,
       code: "200",
       message: "success",
-      data: {
-        field,
-      },
+      data: { fields },
     });
   }
+
+ async createField(req: Request, res: Response) {
+  const {
+    name,
+    address,
+    district,
+    coverImage,
+    article,
+    images,
+    managedByAdmin,
+    type,
+    openHours,
+    pricePerHour,
+  } = req.body;
+
+  if (!name || !address || !district) {
+    throw ErrorHelper.requestDataInvalid("name, address, district required");
+  }
+
+  if (type && !Object.values(TypeFieldEnum).includes(type)) {
+    throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
+  }
+
+  if (openHours && !parseOpenHoursRange(openHours)) {
+    throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+  }
+
+  const slug = name
+    .toLowerCase()
+    .replace(/đ/g, "d")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "-");
+
+  // 🔥 normalize address để tránh "đường A" vs "Đường A "
+  const normalizedAddress = address.trim().toLowerCase();
+  const normalizedDistrict = district.trim().toLowerCase();
+
+  // 🔥 check trùng địa chỉ + quận
+  const existedAddress = await FieldModel.findOne({
+    address: { $regex: `^${normalizedAddress}$`, $options: "i" },
+    district: { $regex: `^${normalizedDistrict}$`, $options: "i" },
+    isDeleted: false,
+  });
+
+  if (existedAddress) {
+    throw ErrorHelper.requestDataInvalid("Địa chỉ sân đã tồn tại");
+  }
+
+  // (optional) vẫn giữ check slug nếu muốn
+  const existedSlug = await FieldModel.findOne({ slug });
+  if (existedSlug) {
+    throw ErrorHelper.requestDataInvalid("Tên sân đã tồn tại");
+  }
+
+  const field = new FieldModel({
+    name,
+    slug,
+    address: normalizedAddress,
+    district: normalizedDistrict,
+    rating: 0,
+    coverImage,
+    article,
+    images,
+    type,
+    openHours,
+    pricePerHour,
+    ownerUserId: req.tokenInfo._id,
+    ownerFullName: req.tokenInfo.name,
+    managedByAdmin: managedByAdmin || false,
+    status: FieldStatusEnum.PENDING,
+  });
+
+  await field.save();
+  await ensureTimeSlotsForOpenHours(openHours);
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "Tạo sân thành công",
+    data: {
+      field,
+    },
+  });
+}
 
   async getField(req: Request, res: Response) {
     const { id } = req.params;
@@ -239,67 +256,67 @@ class FieldRoute extends BaseRoute {
     });
   }
 
- async deleteField(req: Request, res: Response) {
-  const { id } = req.params;
+  async deleteField(req: Request, res: Response) {
+    const { id } = req.params;
 
-  if (!id) {
-    throw ErrorHelper.requestDataInvalid("Thiếu id sân");
-  }
-
-  const field = await FieldModel.findById(id);
-  if (!field) {
-    throw ErrorHelper.requestDataInvalid("Không tìm thấy sân");
-  }
-
-  // check quyền
-  const isOwner =
-    req.tokenInfo.role_ === ROLES.OWNER &&
-    field.ownerUserId.toString() === req.tokenInfo._id;
-
-  const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
-
-  if (!isOwner && !isAdmin) {
-    throw ErrorHelper.permissionDeny();
-  }
-
-  // lấy subField
-  const subFields = await SubFieldModel.find({ fieldId: id });
-  const subFieldIds = subFields.map((s:any) => s._id);
-
-  // check booking
-  const hasBooking = await BookingModel.findOne({
-    subFieldId: { $in: subFieldIds },
-    status: { $ne: BookingStatusEnum.COMPLETED },
-  });
-
-  if (hasBooking) {
-    throw ErrorHelper.requestDataInvalid(
-      "Sân đang có booking chưa hoàn thành",
-    );
-  }
-
-  // xoá booking
-  await BookingModel.deleteMany({
-    subFieldId: { $in: subFieldIds },
-  });
-
-  // xoá subField
-  await SubFieldModel.deleteMany({
-    fieldId: id,
-  });
-
-  // xoá field
-  await FieldModel.deleteOne({ _id: id });
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data:{
-      field,
+    if (!id) {
+      throw ErrorHelper.requestDataInvalid("Thiếu id sân");
     }
-  });
-}
+
+    const field = await FieldModel.findById(id);
+    if (!field) {
+      throw ErrorHelper.requestDataInvalid("Không tìm thấy sân");
+    }
+
+    // check quyền
+    const isOwner =
+      req.tokenInfo.role_ === ROLES.OWNER &&
+      field.ownerUserId.toString() === req.tokenInfo._id;
+
+    const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
+
+    if (!isOwner && !isAdmin) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    // lấy subField
+    const subFields = await SubFieldModel.find({ fieldId: id });
+    const subFieldIds = subFields.map((s: any) => s._id);
+
+    // check booking
+    const hasBooking = await BookingModel.findOne({
+      subFieldId: { $in: subFieldIds },
+      status: { $ne: BookingStatusEnum.COMPLETED },
+    });
+
+    if (hasBooking) {
+      throw ErrorHelper.requestDataInvalid(
+        "Sân đang có booking chưa hoàn thành",
+      );
+    }
+
+    // xoá booking
+    await BookingModel.deleteMany({
+      subFieldId: { $in: subFieldIds },
+    });
+
+    // xoá subField
+    await SubFieldModel.deleteMany({
+      fieldId: id,
+    });
+
+    // xoá field
+    await FieldModel.deleteOne({ _id: id });
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        field,
+      },
+    });
+  }
 
   async getFieldDetail(req: Request, res: Response) {
     const { id } = req.params;
@@ -365,7 +382,9 @@ class FieldRoute extends BaseRoute {
     } = req.body;
 
     if (openHours && !parseOpenHoursRange(openHours)) {
-      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+      throw ErrorHelper.requestDataInvalid(
+        "Giờ mở cửa phải đúng định dạng HH:mm-HH:mm",
+      );
     }
 
     if (name !== undefined) field.name = name;

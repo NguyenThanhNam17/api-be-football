@@ -341,40 +341,64 @@ class UserRoute extends BaseRoute {
     });
   }
 
-  async createUser(req: Request, res: Response) {
-    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
-      throw ErrorHelper.permissionDeny();
-    }
-    let { name, email, phone, password } = req.body;
-    if (!name || !email || !phone || !password) {
-      throw ErrorHelper.requestDataInvalid("data invalid");
-    }
-    let user = await UserModel.findOne({
-      $or: [{ phone }, { email }],
-    });
-    if (user) {
-      throw ErrorHelper.userExisted();
-    }
-    const key = TokenHelper.generateKey();
-    user = new UserModel({
-      name: name,
-      email: email,
-      phone: phone,
-      key: key,
-      password: passwordHash.generate(password),
-      role: ROLES.USER,
-    });
-    await user.save();
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: {
-        user,
-        token: new UserHelper(user).getToken(key),
-      },
-    });
+ async createUser(req: Request, res: Response) {
+  // 🔐 chỉ admin được tạo
+  if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+    throw ErrorHelper.permissionDeny();
   }
+
+  const { name, email, phone, password, role } = req.body;
+
+  if (!name || !email || !phone || !password) {
+    throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
+  }
+
+  // 🔥 chỉ cho USER hoặc OWNER
+  const allowedRoles = [ROLES.USER, ROLES.OWNER];
+
+  let finalRole = ROLES.USER; // default
+
+  if (role) {
+    if (!allowedRoles.includes(role)) {
+      throw ErrorHelper.requestDataInvalid(
+        "Role chỉ được phép là USER hoặc OWNER",
+      );
+    }
+    finalRole = role;
+  }
+
+  // 🔎 check trùng
+  const existed = await UserModel.findOne({
+    $or: [{ phone }, { email }],
+  });
+
+  if (existed) {
+    throw ErrorHelper.userExisted();
+  }
+
+  const key = TokenHelper.generateKey();
+
+  const user = new UserModel({
+    name,
+    email,
+    phone,
+    key,
+    password: passwordHash.generate(password),
+    role: finalRole, // 🔥 dùng role đã validate
+  });
+
+  await user.save();
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "Tạo user thành công",
+    data: {
+      user,
+      token: new UserHelper(user).getToken(key),
+    },
+  });
+}
 
   async deleteUser(req: Request, res: Response) {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
@@ -404,7 +428,7 @@ class UserRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
-    const { userId, name, email, phone, password } = req.body;
+    const { userId, name, phone, password } = req.body;
     if (!userId) {
       throw ErrorHelper.requestDataInvalid("data invalid");
     }
@@ -413,7 +437,6 @@ class UserRoute extends BaseRoute {
       throw ErrorHelper.userNotExist();
     }
     user.name = name || user.name;
-    user.email = email || user.email;
     user.phone = phone || user.phone;
     user.password = password ? passwordHash.generate(password) : user.password;
     await user.save();
