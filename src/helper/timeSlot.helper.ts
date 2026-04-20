@@ -143,7 +143,7 @@ const ensureRequiredTimeSlotEntries = async (
     const identity = getTimeSlotIdentity(slot);
     const existingSlot = existingSlotsByIdentity.get(identity);
 
-    if (existingSlot && !existingSlot.isDeleted) {
+    if (existingSlot) {
       return operations;
     }
 

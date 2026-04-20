@@ -8,13 +8,14 @@ import {
 import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
-import { TypeFieldEnum } from "../../constants/model.const";
+import { BookingStatusEnum, TypeFieldEnum } from "../../constants/model.const";
 import { FieldModel } from "../../models/field/field.model";
 import { SubFieldModel } from "../../models/subField/subField.model";
 import {
   ensureTimeSlotsForOpenHoursList,
   parseOpenHoursRange,
 } from "../../helper/timeSlot.helper";
+import { BookingModel } from "../../models/booking/booking.model";
 
 class SubFieldRoute extends BaseRoute {
   constructor() {
@@ -79,7 +80,6 @@ class SubFieldRoute extends BaseRoute {
 
     const field = await FieldModel.findOne({
       _id: fieldId,
-      isDeleted: false,
     });
 
     if (!field) {
@@ -88,7 +88,6 @@ class SubFieldRoute extends BaseRoute {
 
     const subFields = await SubFieldModel.find({
       fieldId: fieldId,
-      isDeleted: false,
     });
 
     return res.status(200).json({
@@ -122,7 +121,7 @@ class SubFieldRoute extends BaseRoute {
       throw ErrorHelper.requestDataInvalid("Giá phải lớn hơn hoặc bằng 0");
     }
 
-    const field = await FieldModel.findOne({ _id: fieldId, isDeleted: false });
+    const field = await FieldModel.findOne({ _id: fieldId});
     if (!field) {
       throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
     }
@@ -137,7 +136,6 @@ class SubFieldRoute extends BaseRoute {
     const existed = await SubFieldModel.findOne({
       fieldId,
       key,
-      isDeleted: false,
     });
 
     if (existed) {
@@ -151,7 +149,6 @@ class SubFieldRoute extends BaseRoute {
       type,
       pricePerHour,
       openHours,
-      isDeleted: false,
     });
 
     await subField.save();
@@ -176,7 +173,6 @@ class SubFieldRoute extends BaseRoute {
 
     const subField = await SubFieldModel.findOne({
       _id: id,
-      isDeleted: false,
     }).populate("fieldId", "name address");
 
     if (!subField) {
@@ -193,58 +189,66 @@ class SubFieldRoute extends BaseRoute {
     });
   }
 
-  async deleteSubField(req: Request, res: Response) {
-    const { id } = req.params;
-    if (!id) {
-      throw ErrorHelper.requestDataInvalid("Thiếu id sân con");
-    }
+async deleteSubField(req: Request, res: Response) {
+  const { id } = req.body;
 
-    let subField = await SubFieldModel.findOne({
-      _id: id,
-      isDeleted: false,
-    });
-    if (!subField) {
-      throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");
-    }
+  if (!id) {
+    throw ErrorHelper.requestDataInvalid("Thiếu id sân con");
+  }
 
-    let field = await FieldModel.findOne({
-      _id: subField.fieldId,
-      isDeleted: false,
-    });
+  const subField = await SubFieldModel.findById(id);
+  if (!subField) {
+    throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");
+  }
 
-    if (!field) {
-      throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
-    }
+  const field = await FieldModel.findById(subField.fieldId);
 
-    if (
-      (req.tokenInfo.role_ === ROLES.OWNER &&
-        field.ownerUserId.toString() === req.tokenInfo._id) ||
-      req.tokenInfo.role_ === ROLES.ADMIN
-    ) {
-      subField.isDeleted = true;
-    } else {
-      throw ErrorHelper.permissionDeny();
-    }
+  // nếu field đã bị xoá → xoá luôn subField
+  if (!field) {
+    await SubFieldModel.deleteOne({ _id: id });
 
-    // const booking = await BookingModel.findOne({
-    //   subFieldId: id,
-    //   isDeleted: false,
-    // });
-
-    // if (booking) {
-    //   throw ErrorHelper.requestDataInvalid("Sân đã có lịch đặt, không thể xoá");
-    // }
-
-    await subField.save();
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "success",
-      data: {
-        subField,
-      },
+      message: "Sân cha không tồn tại, đã xoá sân con",
     });
   }
+
+  // check quyền
+  const isOwner =
+    req.tokenInfo.role_ === ROLES.OWNER &&
+    field.ownerUserId.toString() === req.tokenInfo._id;
+
+  const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
+
+  if (!isOwner && !isAdmin) {
+    throw ErrorHelper.permissionDeny();
+  }
+
+  // check booking
+  const hasBooking = await BookingModel.findOne({
+    subFieldId: id,
+    status: { $ne: BookingStatusEnum.COMPLETED },
+  });
+
+  if (hasBooking) {
+    throw ErrorHelper.requestDataInvalid(
+      "Sân đang có booking chưa hoàn thành",
+    );
+  }
+
+  // xoá booking liên quan
+  await BookingModel.deleteMany({ subFieldId: id });
+
+  // xoá subField
+  await SubFieldModel.deleteOne({ _id: id });
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "Xoá sân con thành công",
+  });
+}
 
   async getSubFieldDetail(req: Request, res: Response) {
     const { id } = req.params;

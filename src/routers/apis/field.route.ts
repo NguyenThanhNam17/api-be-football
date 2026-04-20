@@ -9,11 +9,13 @@ import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
 import { FieldModel } from "../../models/field/field.model";
-import { FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
+import { BookingStatusEnum, FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
 import {
   ensureTimeSlotsForOpenHours,
   parseOpenHoursRange,
 } from "../../helper/timeSlot.helper";
+import { SubFieldModel } from "../../models/subField/subField.model";
+import { BookingModel } from "../../models/booking/booking.model";
 
 class FieldRoute extends BaseRoute {
   constructor() {
@@ -125,33 +127,19 @@ class FieldRoute extends BaseRoute {
   }
 
   async getAllField(req: Request, res: Response) {
-    const role = req.tokenInfo?.role_;
-    const userId = req.tokenInfo?._id;
-
-    let query: any = {
-      isDeleted: false,
-    };
-
-    if (role === ROLES.ADMIN) {
-    } else if (role === ROLES.OWNER && userId) {
-      query.ownerUserId = userId;
-    } else {
-      query.status = FieldStatusEnum.APPROVED;
-    }
-
-    const fields = await FieldModel.find(query).populate(
-      "ownerUserId",
-      "name email phone",
-    );
-
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: {
-        fields,
-      },
-    });
+   let fields = await FieldModel.find({
+      status: FieldStatusEnum.APPROVED,
+   });
+   if(!fields) {
+    throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
+   }
+   return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: {fields},
+   });  
+   
   }
 
   async createField(req: Request, res: Response) {
@@ -210,7 +198,6 @@ class FieldRoute extends BaseRoute {
       ownerFullName: req.tokenInfo.name,
       managedByAdmin: managedByAdmin || false,
       status: FieldStatusEnum.PENDING,
-      isDeleted: false,
     });
 
     await field.save();
@@ -235,7 +222,6 @@ class FieldRoute extends BaseRoute {
 
     const field = await FieldModel.findOne({
       _id: id,
-      isDeleted: false,
       status: FieldStatusEnum.APPROVED,
     }).populate("ownerUserId", "name email phone");
 
@@ -253,35 +239,67 @@ class FieldRoute extends BaseRoute {
     });
   }
 
-  async deleteField(req: Request, res: Response) {
-    if (
-      req.tokenInfo.role_ !== ROLES.ADMIN &&
-      req.tokenInfo.role_ !== ROLES.OWNER
-    ) {
-      throw ErrorHelper.forbidden("Bạn không có quyền xoá sân");
-    }
-    const { id } = req.params;
-    if (!id) {
-      throw ErrorHelper.requestDataInvalid("Thiếu id sân");
-    }
-    const field = await FieldModel.findOne({
-      _id: id,
-      isDeleted: false,
-    });
-    if (!field) {
-      throw ErrorHelper.forbidden("Không tìm thấy sân");
-    }
-    field.isDeleted = true;
-    await field.save();
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "succes",
-      data: {
-        field,
-      },
-    });
+ async deleteField(req: Request, res: Response) {
+  const { id } = req.params;
+
+  if (!id) {
+    throw ErrorHelper.requestDataInvalid("Thiếu id sân");
   }
+
+  const field = await FieldModel.findById(id);
+  if (!field) {
+    throw ErrorHelper.requestDataInvalid("Không tìm thấy sân");
+  }
+
+  // check quyền
+  const isOwner =
+    req.tokenInfo.role_ === ROLES.OWNER &&
+    field.ownerUserId.toString() === req.tokenInfo._id;
+
+  const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
+
+  if (!isOwner && !isAdmin) {
+    throw ErrorHelper.permissionDeny();
+  }
+
+  // lấy subField
+  const subFields = await SubFieldModel.find({ fieldId: id });
+  const subFieldIds = subFields.map((s:any) => s._id);
+
+  // check booking
+  const hasBooking = await BookingModel.findOne({
+    subFieldId: { $in: subFieldIds },
+    status: { $ne: BookingStatusEnum.COMPLETED },
+  });
+
+  if (hasBooking) {
+    throw ErrorHelper.requestDataInvalid(
+      "Sân đang có booking chưa hoàn thành",
+    );
+  }
+
+  // xoá booking
+  await BookingModel.deleteMany({
+    subFieldId: { $in: subFieldIds },
+  });
+
+  // xoá subField
+  await SubFieldModel.deleteMany({
+    fieldId: id,
+  });
+
+  // xoá field
+  await FieldModel.deleteOne({ _id: id });
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data:{
+      field,
+    }
+  });
+}
 
   async getFieldDetail(req: Request, res: Response) {
     const { id } = req.params;
@@ -292,7 +310,6 @@ class FieldRoute extends BaseRoute {
 
     const field = await FieldModel.findOne({
       _id: id,
-      isDeleted: false,
     }).populate("ownerUserId", "name email phone");
 
     if (!field) {
@@ -323,7 +340,6 @@ class FieldRoute extends BaseRoute {
 
     const field = await FieldModel.findOne({
       _id: id,
-      isDeleted: false,
     });
 
     if (!field) {
@@ -391,7 +407,6 @@ class FieldRoute extends BaseRoute {
     }
 
     field.status = FieldStatusEnum.APPROVED;
-    field.rejectReason = undefined;
 
     await field.save();
 
@@ -417,7 +432,6 @@ class FieldRoute extends BaseRoute {
     }
 
     field.status = FieldStatusEnum.REJECTED;
-    field.rejectReason = reason || "Không hợp lệ";
 
     await field.save();
 

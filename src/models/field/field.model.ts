@@ -16,8 +16,6 @@ export type IField = BaseDocument & {
   ownerFullName?: string;
   managedByAdmin?: boolean;
   status?: FieldStatusEnum;
-  isDeleted?: boolean;
-  rejectReason?: string;
   type?: TypeFieldEnum;
   openHours?: string;
   pricePerHour?: number;
@@ -78,22 +76,16 @@ const fieldSchema = new mongoose.Schema(
       default: false,
     },
 
-    isDeleted: {
-      type: Boolean,
-      default: false,
-    },
     status: {
       type: String,
       enum: Object.values(FieldStatusEnum),
       default: FieldStatusEnum.PENDING,
     },
-    rejectReason: {
+
+    type: {
       type: String,
+      enum: Object.values(TypeFieldEnum),
     },
-   type: {
-  type: String,
-  enum: Object.values(TypeFieldEnum), 
-},
 
     openHours: {
       type: String,
@@ -103,7 +95,6 @@ const fieldSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
-
   },
   { timestamps: true },
 );

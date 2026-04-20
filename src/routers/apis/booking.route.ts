@@ -74,11 +74,18 @@ const getTimeSlotDurationMinutes = (timeSlot: any) => {
 };
 
 const buildCustomerInfo = (booking: any) => {
-  const user = booking?.userId && typeof booking.userId === "object" ? booking.userId : null;
+  const user =
+    booking?.userId && typeof booking.userId === "object"
+      ? booking.userId
+      : null;
   const field =
-    booking?.fieldId && typeof booking.fieldId === "object" ? booking.fieldId : null;
+    booking?.fieldId && typeof booking.fieldId === "object"
+      ? booking.fieldId
+      : null;
   const bookingUserId = String(user?._id || booking?.userId || "").trim();
-  const ownerUserId = String(field?.ownerUserId?._id || field?.ownerUserId || "").trim();
+  const ownerUserId = String(
+    field?.ownerUserId?._id || field?.ownerUserId || "",
+  ).trim();
   const isManualOwnerBooking =
     Boolean(bookingUserId) &&
     Boolean(ownerUserId) &&
@@ -103,10 +110,18 @@ const buildCustomerInfo = (booking: any) => {
   };
 };
 
-const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, any>) => {
+const serializeBooking = (
+  booking: any,
+  latestPaymentsByBookingId: Map<string, any>,
+) => {
   const rawBooking =
-    booking && typeof booking.toObject === "function" ? booking.toObject() : booking;
-  const field = rawBooking?.fieldId && typeof rawBooking.fieldId === "object" ? rawBooking.fieldId : null;
+    booking && typeof booking.toObject === "function"
+      ? booking.toObject()
+      : booking;
+  const field =
+    rawBooking?.fieldId && typeof rawBooking.fieldId === "object"
+      ? rawBooking.fieldId
+      : null;
   const subField =
     rawBooking?.subFieldId && typeof rawBooking.subFieldId === "object"
       ? rawBooking.subFieldId
@@ -115,22 +130,27 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
     rawBooking?.timeSlotId && typeof rawBooking.timeSlotId === "object"
       ? rawBooking.timeSlotId
       : null;
-  const latestPayment = latestPaymentsByBookingId.get(String(rawBooking?._id || "")) || null;
+  const latestPayment =
+    latestPaymentsByBookingId.get(String(rawBooking?._id || "")) || null;
   const latestPaymentAmount = Number(latestPayment?.amount || 0);
-  const latestPaymentStatus = String(latestPayment?.status || "").trim().toUpperCase();
-  const latestPaymentType = String(latestPayment?.paymentType || "").trim().toUpperCase();
+  const latestPaymentStatus = String(latestPayment?.status || "")
+    .trim()
+    .toUpperCase();
+  const latestPaymentType = String(latestPayment?.paymentType || "")
+    .trim()
+    .toUpperCase();
   const timeSlotLabel = getTimeSlotLabel(timeSlot);
   const holdExpiresAt =
     rawBooking?.expiredAt || getBookingHoldExpiresAt(rawBooking).toISOString();
   const isDepositPaid =
-    String(rawBooking?.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID ||
+    String(rawBooking?.depositStatus || "")
+      .trim()
+      .toUpperCase() === DepositStatusEnum.PAID ||
     latestPaymentStatus === PaymentStatusEnum.PAID;
   const isFullyPaid =
     Number(rawBooking?.remainingAmount || 0) <= 0 ||
-    (
-      latestPaymentStatus === PaymentStatusEnum.PAID &&
-      latestPaymentType === "FULL"
-    );
+    (latestPaymentStatus === PaymentStatusEnum.PAID &&
+      latestPaymentType === "FULL");
 
   return {
     ...rawBooking,
@@ -188,20 +208,23 @@ const serializeBooking = (booking: any, latestPaymentsByBookingId: Map<string, a
     paidAmount: latestPaymentAmount,
     depositPaid: isDepositPaid,
     fullyPaid: isFullyPaid,
-    depositPaidAt:
-      isDepositPaid
-        ? latestPayment?.updatedAt || latestPayment?.createdAt || rawBooking?.updatedAt || null
-        : null,
-    fullyPaidAt:
-      isFullyPaid
-        ? latestPayment?.updatedAt || latestPayment?.createdAt || null
-        : null,
+    depositPaidAt: isDepositPaid
+      ? latestPayment?.updatedAt ||
+        latestPayment?.createdAt ||
+        rawBooking?.updatedAt ||
+        null
+      : null,
+    fullyPaidAt: isFullyPaid
+      ? latestPayment?.updatedAt || latestPayment?.createdAt || null
+      : null,
     holdExpiresAt,
     expiredAt: holdExpiresAt,
   };
 };
 
-const getLatestPaymentsByBookingIds = async (bookingIds: Types.ObjectId[] = []) => {
+const getLatestPaymentsByBookingIds = async (
+  bookingIds: Types.ObjectId[] = [],
+) => {
   if (!bookingIds.length) {
     return new Map<string, any>();
   }
@@ -211,11 +234,12 @@ const getLatestPaymentsByBookingIds = async (bookingIds: Types.ObjectId[] = []) 
       { bookingId: { $in: bookingIds } },
       { bookingIds: { $in: bookingIds } },
     ],
-    isDeleted: false,
   }).sort({ createdAt: -1 });
 
   const latestPaymentsByBookingId = new Map<string, any>();
-  const requestedBookingIds = new Set(bookingIds.map((bookingId) => String(bookingId || "").trim()));
+  const requestedBookingIds = new Set(
+    bookingIds.map((bookingId) => String(bookingId || "").trim()),
+  );
 
   payments.forEach((payment) => {
     const linkedBookingIds = Array.from(
@@ -230,7 +254,10 @@ const getLatestPaymentsByBookingIds = async (bookingIds: Types.ObjectId[] = []) 
     );
 
     linkedBookingIds.forEach((bookingId) => {
-      if (requestedBookingIds.has(bookingId) && !latestPaymentsByBookingId.has(bookingId)) {
+      if (
+        requestedBookingIds.has(bookingId) &&
+        !latestPaymentsByBookingId.has(bookingId)
+      ) {
         latestPaymentsByBookingId.set(bookingId, payment);
       }
     });
@@ -319,7 +346,9 @@ const getBookingTimeSortValue = (booking: any) => {
     return Number.MAX_SAFE_INTEGER;
   }
 
-  const [hours, minutes] = startTime.split(":").map((value) => Number.parseInt(value, 10));
+  const [hours, minutes] = startTime
+    .split(":")
+    .map((value) => Number.parseInt(value, 10));
 
   return hours * 60 + minutes;
 };
@@ -333,7 +362,8 @@ const sortDashboardBookings = (bookings: any[] = []) =>
       return leftDateKey.localeCompare(rightDateKey);
     }
 
-    const timeSortDiff = getBookingTimeSortValue(left) - getBookingTimeSortValue(right);
+    const timeSortDiff =
+      getBookingTimeSortValue(left) - getBookingTimeSortValue(right);
 
     if (timeSortDiff !== 0) {
       return timeSortDiff;
@@ -364,8 +394,12 @@ const sortDashboardBookings = (bookings: any[] = []) =>
   });
 
 const isBlockingDashboardBooking = (booking: any, now: Date = new Date()) => {
-  const status = String(booking?.status || "").trim().toUpperCase();
-  const depositStatus = String(booking?.depositStatus || "").trim().toUpperCase();
+  const status = String(booking?.status || "")
+    .trim()
+    .toUpperCase();
+  const depositStatus = String(booking?.depositStatus || "")
+    .trim()
+    .toUpperCase();
 
   if (status === BookingStatusEnum.CANCELLED) {
     return false;
@@ -375,7 +409,11 @@ const isBlockingDashboardBooking = (booking: any, now: Date = new Date()) => {
     return true;
   }
 
-  if ([BookingStatusEnum.CONFIRMED, BookingStatusEnum.COMPLETED].includes(status as BookingStatusEnum)) {
+  if (
+    [BookingStatusEnum.CONFIRMED, BookingStatusEnum.COMPLETED].includes(
+      status as BookingStatusEnum,
+    )
+  ) {
     return true;
   }
 
@@ -393,13 +431,17 @@ const isBlockingDashboardBooking = (booking: any, now: Date = new Date()) => {
 };
 
 const getCustomerIdentity = (booking: any) => {
-  const customerId = String(booking?.customer?.id || booking?.userId || "").trim();
+  const customerId = String(
+    booking?.customer?.id || booking?.userId || "",
+  ).trim();
 
   if (customerId) {
     return `id:${customerId}`;
   }
 
-  const email = String(booking?.customer?.email || "").trim().toLowerCase();
+  const email = String(booking?.customer?.email || "")
+    .trim()
+    .toLowerCase();
 
   if (email) {
     return `email:${email}`;
@@ -411,7 +453,9 @@ const getCustomerIdentity = (booking: any) => {
     return `phone:${phone}`;
   }
 
-  const fullName = String(booking?.customer?.fullName || "").trim().toLowerCase();
+  const fullName = String(booking?.customer?.fullName || "")
+    .trim()
+    .toLowerCase();
 
   if (fullName) {
     return `name:${fullName}`;
@@ -430,7 +474,6 @@ const canOwnerManageBooking = async (ownerId: string, booking: any) => {
   const field = await FieldModel.findOne({
     _id: fieldId,
     ownerUserId: ownerObjectId,
-    isDeleted: false,
   } as any).select("_id");
 
   return Boolean(field);
@@ -448,7 +491,7 @@ class BookingRoute extends BaseRoute {
       this.route(this.createBooking),
     );
     this.router.get("/getBooking/:id", this.route(this.getBooking));
-    this.router.post(
+    this.router.get(
       "/getMyBookings",
       [this.authentication],
       this.route(this.getMyBookings),
@@ -507,7 +550,6 @@ class BookingRoute extends BaseRoute {
 
     let subField = await SubFieldModel.findOne({
       _id: subFieldId,
-      isDeleted: false,
     });
 
     if (!subField) {
@@ -516,7 +558,6 @@ class BookingRoute extends BaseRoute {
 
     let field = await FieldModel.findOne({
       _id: subField.fieldId,
-      isDeleted: false,
     });
 
     if (!field) {
@@ -532,6 +573,10 @@ class BookingRoute extends BaseRoute {
     }
 
     const bookingDate = new Date(date);
+
+    if (bookingDate < new Date()) {
+      throw ErrorHelper.requestDataInvalid("Không thể đặt lịch trong quá khứ");
+    }
 
     const now = new Date();
 
@@ -617,7 +662,6 @@ class BookingRoute extends BaseRoute {
 
     const booking = await BookingModel.findOne({
       _id: id,
-      isDeleted: false,
     })
       .populate("fieldId", "name address slug district ownerUserId openHours")
       .populate("subFieldId", "name type key pricePerHour openHours")
@@ -644,474 +688,102 @@ class BookingRoute extends BaseRoute {
   }
 
   async getMyBookings(req: Request, res: Response) {
-    let query: any = {
-      isDeleted: false,
-    };
+  const query: any = {};
 
-    if (req.tokenInfo) {
-      if (req.tokenInfo.role_ === ROLES.OWNER) {
-        const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
-        const ownedFieldIds = await FieldModel.find({
-          ownerUserId: ownerObjectId,
-          isDeleted: false,
-        } as any).distinct("_id");
-
-        query.fieldId = {
-          $in: ownedFieldIds,
-        };
-      } else if (req.tokenInfo.role_ !== ROLES.ADMIN) {
-        query.userId = new Types.ObjectId(req.tokenInfo._id);
-      }
-    } else {
-      // No token - return empty bookings
-      return res.status(200).json({
-        status: 200,
-        code: "200",
-        message: "success",
-        data: {
-          bookings: [],
-        },
-      });
-    }
-
-    await expireStalePendingBookings(query, new Date());
-
-    const bookings = await BookingModel.find(query)
-      .populate("fieldId", "name address slug district ownerUserId openHours")
-      .populate("subFieldId", "name type key pricePerHour openHours")
-      .populate("timeSlotId", "startTime endTime label")
-      .populate("userId", "name email phone createdAt")
-      .sort({ createdAt: -1 });
-    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
-      bookings
-        .map((booking) => toObjectId(booking?._id))
-        .filter((bookingId): bookingId is Types.ObjectId => Boolean(bookingId)),
-    );
-
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: {
-        bookings: bookings.map((booking) =>
-          serializeBooking(booking, latestPaymentsByBookingId),
-        ),
-      },
-    });
+  if (!req.tokenInfo) {
+    throw ErrorHelper.unauthorized();
   }
 
-  async getDashboard(req: Request, res: Response) {
-    if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
-      throw ErrorHelper.permissionDeny();
-    }
+  // 👇 OWNER: lấy tất cả field của owner
+  if (req.tokenInfo.role_ === ROLES.OWNER) {
+    const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
 
-    const availabilityDate = parseDashboardDate(req.query.date);
-    const months = Math.min(
-      toPositiveInteger(req.query.months, DEFAULT_DASHBOARD_MONTHS),
-      24,
-    );
-    const recentLimit = Math.min(
-      toPositiveInteger(req.query.recentLimit, DEFAULT_DASHBOARD_RECENT_LIMIT),
-      100,
-    );
-    const managedLimit = Math.min(
-      toPositiveInteger(req.query.managedLimit, DEFAULT_DASHBOARD_MANAGED_LIMIT),
-      200,
-    );
-    const now = new Date();
-    const emptyDashboardData: any = {
-      stats: {
-        totalFields: 0,
-        totalBookings: 0,
-        pendingBookings: 0,
-        confirmedBookings: 0,
-        cancelledBookings: 0,
-        totalCustomers: 0,
-        totalRevenue: 0,
-        totalDepositsPaid: 0,
-      },
-      recentBookings: [],
-      managedBookings: [],
-      availabilityDate,
-      dailyAvailability: [],
-      customerMonthlyStats: [],
-      customerSummaries: [],
-    };
+    const fieldIds = await FieldModel.find({
+      ownerUserId: ownerObjectId,
+    }).distinct("_id");
 
-    const fieldQuery: any = {
-      isDeleted: false,
-    };
-
-    if (req.tokenInfo.role_ === ROLES.OWNER) {
-      fieldQuery.ownerUserId = new Types.ObjectId(req.tokenInfo._id);
-    }
-
-    const fields = await FieldModel.find(fieldQuery).sort({ name: 1 });
-    const fieldIds = fields
-      .map((field) => toObjectId(field?._id))
-      .filter((fieldId): fieldId is Types.ObjectId => Boolean(fieldId));
-
-    if (!fieldIds.length) {
-      return res.status(200).json({
-        status: 200,
-        code: "200",
-        message: "success",
-        data: emptyDashboardData,
-      });
-    }
-
-    await expireStalePendingBookings(
-      {
-        fieldId: { $in: fieldIds },
-      },
-      now,
-    );
-
-    const [subFields, bookings] = await Promise.all([
-      SubFieldModel.find({
-        fieldId: { $in: fieldIds },
-        isDeleted: false,
-      }).sort({ name: 1 }),
-      BookingModel.find({
-        fieldId: { $in: fieldIds },
-        isDeleted: false,
-      })
-        .populate("fieldId", "name address slug district ownerUserId openHours")
-        .populate("subFieldId", "name type key pricePerHour openHours fieldId")
-        .populate("timeSlotId", "startTime endTime label")
-        .populate("userId", "name email phone createdAt")
-        .sort({ createdAt: -1 }),
-    ]);
-
-    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
-      bookings
-        .map((booking) => toObjectId(booking?._id))
-        .filter((bookingId): bookingId is Types.ObjectId => Boolean(bookingId)),
-    );
-
-    const serializedBookings = bookings.map((booking) =>
-      serializeBooking(booking, latestPaymentsByBookingId),
-    );
-    const recentBookings = serializedBookings.slice(0, recentLimit);
-    const managedBookings = sortDashboardBookings(
-      serializedBookings.filter(
-        (booking) =>
-          getBookingDateKey(booking) === availabilityDate &&
-          String(booking?.status || "").trim().toUpperCase() !== BookingStatusEnum.CANCELLED,
-      ),
-    ).slice(0, managedLimit);
-    const blockingBookingsForDate = sortDashboardBookings(
-      serializedBookings.filter(
-        (booking) =>
-          getBookingDateKey(booking) === availabilityDate &&
-          isBlockingDashboardBooking(booking, now),
-      ),
-    );
-
-    const subFieldsByFieldId = new Map<string, any[]>();
-
-    subFields.forEach((subField) => {
-      const fieldId = String(subField?.fieldId || "").trim();
-
-      if (!fieldId) {
-        return;
-      }
-
-      const currentItems = subFieldsByFieldId.get(fieldId) || [];
-      currentItems.push(subField);
-      subFieldsByFieldId.set(fieldId, currentItems);
-    });
-
-    const blockingBookingsBySubFieldId = new Map<string, any[]>();
-
-    blockingBookingsForDate.forEach((booking) => {
-      const subFieldId = String(booking?.subFieldId || "").trim();
-
-      if (!subFieldId) {
-        return;
-      }
-
-      const currentItems = blockingBookingsBySubFieldId.get(subFieldId) || [];
-      currentItems.push(booking);
-      blockingBookingsBySubFieldId.set(subFieldId, currentItems);
-    });
-
-    const dailyAvailability = fields.map((field) => {
-      const fieldId = String(field?._id || "").trim();
-      const fieldSubFields = subFieldsByFieldId.get(fieldId) || [];
-      let availableSubFields = 0;
-      let bookingCount = 0;
-
-      const dashboardSubFields = fieldSubFields.map((subField) => {
-        const subFieldId = String(subField?._id || "").trim();
-        const subFieldBookings = sortDashboardBookings(
-          blockingBookingsBySubFieldId.get(subFieldId) || [],
-        );
-        const isAvailable = subFieldBookings.length === 0;
-
-        if (isAvailable) {
-          availableSubFields += 1;
-        }
-
-        bookingCount += subFieldBookings.length;
-
-        return {
-          key: String(subField?.key || "").trim(),
-          name: String(subField?.name || "").trim(),
-          type: String(subField?.type || "").trim(),
-          pricePerHour: Number(subField?.pricePerHour || 0),
-          isAvailable,
-          bookings: subFieldBookings.map((booking) => ({
-            id: String(booking?.id || booking?._id || "").trim(),
-            timeSlot: String(booking?.timeSlot || booking?.timeSlotLabel || "").trim(),
-            status: String(booking?.status || "").trim(),
-            customerName: String(booking?.customer?.fullName || "").trim(),
-            phone: String(booking?.customer?.phone || "").trim(),
-          })),
-        };
-      });
-
-      return {
-        id: String(field?._id || "").trim(),
-        name: String(field?.name || "").trim(),
-        slug: String(field?.slug || "").trim(),
-        address: String(field?.address || "").trim(),
-        district: String(field?.district || "").trim(),
-        openHours: String(field?.openHours || "").trim(),
-        totalSubFields: dashboardSubFields.length,
-        availableSubFields,
-        bookingCount,
-        subFields: dashboardSubFields,
-      };
-    });
-
-    const selectedDate = new Date(`${availabilityDate}T00:00:00.000Z`);
-    const selectedMonthStart = new Date(
-      Date.UTC(selectedDate.getUTCFullYear(), selectedDate.getUTCMonth(), 1),
-    );
-    const monthKeys = Array.from({ length: months }).map((_, index) => {
-      const monthDate = new Date(
-        Date.UTC(
-          selectedMonthStart.getUTCFullYear(),
-          selectedMonthStart.getUTCMonth() - (months - index - 1),
-          1,
-        ),
-      );
-
-      return monthDate.toISOString().slice(0, 7);
-    });
-
-    const monthlyStatsMap = new Map<
-      string,
-      {
-        monthKey: string;
-        label: string;
-        customerKeys: Set<string>;
-        bookings: number;
-        confirmedBookings: number;
-        cancelledBookings: number;
-        revenue: number;
-      }
-    >();
-
-    monthKeys.forEach((monthKey) => {
-      monthlyStatsMap.set(monthKey, {
-        monthKey,
-        label: getMonthLabel(monthKey),
-        customerKeys: new Set<string>(),
-        bookings: 0,
-        confirmedBookings: 0,
-        cancelledBookings: 0,
-        revenue: 0,
-      });
-    });
-
-    const customerSummaryMap = new Map<string, any>();
-    let totalRevenue = 0;
-    let totalDepositsPaid = 0;
-    let pendingBookings = 0;
-    let confirmedBookings = 0;
-    let cancelledBookings = 0;
-
-    serializedBookings.forEach((booking) => {
-      const status = String(booking?.status || "").trim().toUpperCase();
-      const bookingDateKey = getBookingDateKey(booking);
-      const monthKey = getMonthKey(booking?.date);
-      const customerKey =
-        getCustomerIdentity(booking) ||
-        `booking:${String(booking?.id || booking?._id || "").trim()}`;
-      const totalPrice = Number(booking?.totalPrice || 0);
-      const depositAmount = Number(booking?.depositAmount || 0);
-      const isConfirmedBooking = [
-        BookingStatusEnum.CONFIRMED,
-        BookingStatusEnum.COMPLETED,
-      ].includes(status as BookingStatusEnum);
-      const isCancelledBooking = status === BookingStatusEnum.CANCELLED;
-
-      if (status === BookingStatusEnum.PENDING) {
-        pendingBookings += 1;
-      }
-
-      if (isConfirmedBooking) {
-        confirmedBookings += 1;
-        totalRevenue += totalPrice;
-      }
-
-      if (isCancelledBooking) {
-        cancelledBookings += 1;
-      }
-
-      if (booking?.depositPaid) {
-        totalDepositsPaid += depositAmount;
-      }
-
-      const monthlyStats = monthlyStatsMap.get(monthKey);
-
-      if (monthlyStats) {
-        monthlyStats.bookings += 1;
-
-        if (customerKey) {
-          monthlyStats.customerKeys.add(customerKey);
-        }
-
-        if (isConfirmedBooking) {
-          monthlyStats.confirmedBookings += 1;
-          monthlyStats.revenue += totalPrice;
-        }
-
-        if (isCancelledBooking) {
-          monthlyStats.cancelledBookings += 1;
-        }
-      }
-
-      const currentSummary = customerSummaryMap.get(customerKey) || {
-        key: customerKey,
-        id: String(booking?.customer?.id || "").trim(),
-        fullName: String(booking?.customer?.fullName || "").trim(),
-        email: String(booking?.customer?.email || "").trim(),
-        phone: String(booking?.customer?.phone || "").trim(),
-        totalBookings: 0,
-        confirmedBookings: 0,
-        cancelledBookings: 0,
-        totalSpent: 0,
-        lastBookingAt: null,
-        lastFieldName: "",
-        lastTimeSlot: "",
-        lastDate: "",
-        lastStatus: "",
-      };
-
-      currentSummary.totalBookings += 1;
-
-      if (!currentSummary.fullName) {
-        currentSummary.fullName = String(booking?.customer?.fullName || "").trim();
-      }
-
-      if (!currentSummary.email) {
-        currentSummary.email = String(booking?.customer?.email || "").trim();
-      }
-
-      if (!currentSummary.phone) {
-        currentSummary.phone = String(booking?.customer?.phone || "").trim();
-      }
-
-      if (!currentSummary.id) {
-        currentSummary.id = String(booking?.customer?.id || "").trim();
-      }
-
-      if (isConfirmedBooking) {
-        currentSummary.confirmedBookings += 1;
-        currentSummary.totalSpent += totalPrice;
-      }
-
-      if (isCancelledBooking) {
-        currentSummary.cancelledBookings += 1;
-      }
-
-      const candidateLastBookingAt =
-        booking?.createdAt || booking?.updatedAt || booking?.date || null;
-      const candidateTimestamp = candidateLastBookingAt
-        ? new Date(candidateLastBookingAt).getTime()
-        : 0;
-      const currentTimestamp = currentSummary.lastBookingAt
-        ? new Date(currentSummary.lastBookingAt).getTime()
-        : 0;
-
-      if (candidateTimestamp >= currentTimestamp) {
-        currentSummary.lastBookingAt = candidateLastBookingAt;
-        currentSummary.lastFieldName = String(booking?.fieldName || "").trim();
-        currentSummary.lastTimeSlot = String(
-          booking?.timeSlot || booking?.timeSlotLabel || "",
-        ).trim();
-        currentSummary.lastDate = bookingDateKey;
-        currentSummary.lastStatus = String(booking?.status || "").trim();
-      }
-
-      customerSummaryMap.set(customerKey, currentSummary);
-    });
-
-    const customerMonthlyStats = monthKeys.map((monthKey) => {
-      const monthlyStats = monthlyStatsMap.get(monthKey);
-
-      return {
-        monthKey,
-        label: monthlyStats?.label || getMonthLabel(monthKey),
-        uniqueCustomers: monthlyStats?.customerKeys.size || 0,
-        bookings: monthlyStats?.bookings || 0,
-        confirmedBookings: monthlyStats?.confirmedBookings || 0,
-        cancelledBookings: monthlyStats?.cancelledBookings || 0,
-        revenue: monthlyStats?.revenue || 0,
-      };
-    });
-
-    const customerSummaries = Array.from(customerSummaryMap.values()).sort(
-      (left, right) => {
-        const leftTimestamp = left?.lastBookingAt
-          ? new Date(left.lastBookingAt).getTime()
-          : 0;
-        const rightTimestamp = right?.lastBookingAt
-          ? new Date(right.lastBookingAt).getTime()
-          : 0;
-
-        if (leftTimestamp !== rightTimestamp) {
-          return rightTimestamp - leftTimestamp;
-        }
-
-        if (left.totalBookings !== right.totalBookings) {
-          return right.totalBookings - left.totalBookings;
-        }
-
-        return String(left?.fullName || "").localeCompare(
-          String(right?.fullName || ""),
-          "vi",
-        );
-      },
-    );
-
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-      data: {
-        stats: {
-          totalFields: fields.length,
-          totalBookings: serializedBookings.length,
-          pendingBookings,
-          confirmedBookings,
-          cancelledBookings,
-          totalCustomers: customerSummaryMap.size,
-          totalRevenue,
-          totalDepositsPaid,
-        },
-        recentBookings,
-        managedBookings,
-        availabilityDate,
-        dailyAvailability,
-        customerMonthlyStats,
-        customerSummaries,
-      },
-    });
+    query.fieldId = { $in: fieldIds };
   }
+
+  // 👇 USER: chỉ lấy booking của mình
+  else if (req.tokenInfo.role_ === ROLES.USER) {
+    query.userId = new Types.ObjectId(req.tokenInfo._id);
+  }
+
+  // 👇 ADMIN: không cần filter (xem tất cả)
+
+  const bookings = await BookingModel.find(query)
+    .populate("fieldId", "name address")
+    .populate("subFieldId", "name")
+    .populate("timeSlotId", "startTime endTime")
+    .sort({ createdAt: -1 });
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: {
+      bookings,
+    },
+  });
+}
+
+ async getDashboard(req: Request, res: Response) {
+  if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
+    throw ErrorHelper.permissionDeny();
+  }
+
+  let fieldIds: Types.ObjectId[] = [];
+
+  // 👇 OWNER → chỉ lấy sân của mình
+  if (req.tokenInfo.role_ === ROLES.OWNER) {
+    fieldIds = await FieldModel.find({
+      ownerUserId: req.tokenInfo._id,
+    }).distinct("_id");
+  } else {
+    // 👇 ADMIN → lấy tất cả
+    fieldIds = await FieldModel.find().distinct("_id");
+  }
+
+  const bookings = await BookingModel.find({
+    fieldId: { $in: fieldIds },
+  });
+
+  // 📊 thống kê
+  let totalBookings = bookings.length;
+  let pending = 0;
+  let confirmed = 0;
+  let cancelled = 0;
+  let revenue = 0;
+
+  bookings.forEach((b) => {
+    if (b.status === BookingStatusEnum.PENDING) pending++;
+    if (
+      b.status === BookingStatusEnum.CONFIRMED ||
+      b.status === BookingStatusEnum.COMPLETED
+    ) {
+      confirmed++;
+      revenue += b.totalPrice;
+    }
+    if (b.status === BookingStatusEnum.CANCELLED) cancelled++;
+  });
+
+  const totalFields = fieldIds.length;
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: {
+      totalFields,
+      totalBookings,
+      pendingBookings: pending,
+      confirmedBookings: confirmed,
+      cancelledBookings: cancelled,
+      totalRevenue: revenue,
+    },
+  });
+}
 
   async cancelBooking(req: Request, res: Response) {
     const { id } = req.params;
@@ -1122,7 +794,6 @@ class BookingRoute extends BaseRoute {
 
     const booking = await BookingModel.findOne({
       _id: id,
-      isDeleted: false,
     });
 
     if (!booking) {
@@ -1137,7 +808,11 @@ class BookingRoute extends BaseRoute {
       throw ErrorHelper.forbidden("Không thể huỷ booking đã hoàn thành");
     }
 
-    if (String(booking.depositStatus || "").trim().toUpperCase() === DepositStatusEnum.PAID) {
+    if (
+      String(booking.depositStatus || "")
+        .trim()
+        .toUpperCase() === DepositStatusEnum.PAID
+    ) {
       throw ErrorHelper.forbidden("Chỉ có thể hủy booking chưa thanh toán");
     }
 
@@ -1162,7 +837,6 @@ class BookingRoute extends BaseRoute {
 
     const booking = await BookingModel.findOne({
       _id: id,
-      isDeleted: false,
     });
 
     if (!booking) {
@@ -1241,7 +915,9 @@ class BookingRoute extends BaseRoute {
     const bookedTimeSlotIds = bookings
       .map((booking) => {
         const bookingObject =
-          booking && typeof booking.toObject === "function" ? booking.toObject() : booking;
+          booking && typeof booking.toObject === "function"
+            ? booking.toObject()
+            : booking;
         const timeSlotId = bookingObject?.timeSlotId;
         return String(timeSlotId?._id || timeSlotId || "").trim();
       })

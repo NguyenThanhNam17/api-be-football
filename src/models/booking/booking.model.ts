@@ -21,9 +21,6 @@ export type IBooking = BaseDocument & {
   depositStatus?: string;
   depositMethod?: string;
   expiredAt?: Date;
-  isDeleted?: boolean;
-  cancelReason?: string;
-  isRefunded?: boolean;
 };
 
 const bookingSchema = new mongoose.Schema(
@@ -82,11 +79,6 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
     },
 
-    isRefunded: {
-      type: Boolean,
-      default: false,
-    },
-
     status: {
       type: String,
       enum: Object.values(BookingStatusEnum),
@@ -106,15 +98,6 @@ const bookingSchema = new mongoose.Schema(
     },
 
     note: {
-      type: String,
-      trim: true,
-    },
-
-    isDeleted: {
-      type: Boolean,
-      default: false,
-    },
-    cancelReason: {
       type: String,
       trim: true,
     },

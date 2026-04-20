@@ -8,7 +8,6 @@ export type IUser = BaseDocument & {
   password: string;
   phone?: string;
   role: string;
-  isDeleted?: boolean;
   isRequestOwner?: boolean;
 };
 
@@ -39,7 +38,6 @@ const userSchema = new mongoose.Schema(
       enum: Object.values(UserRoleEnum),
       default: UserRoleEnum.USER,
     },
-    isDeleted: { type: Boolean, default: false },
     isRequestOwner: {
       type: Boolean,
       default: false,

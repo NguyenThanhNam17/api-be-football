@@ -5,7 +5,6 @@ export type ITimeSlot = BaseDocument & {
   startTime: string;
   endTime: string;
   label?: string;
-  isDeleted?: boolean;
 };
 
 const timeSlotSchema = new mongoose.Schema(
@@ -24,11 +23,6 @@ const timeSlotSchema = new mongoose.Schema(
 
     label: {
       type: String,
-    },
-
-    isDeleted: {
-      type: Boolean,
-      default: false,
     },
   },
   { timestamps: true },

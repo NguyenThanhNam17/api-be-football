@@ -9,7 +9,6 @@ export type ISubField = BaseDocument & {
   type: TypeFieldEnum;
   pricePerHour: number;
   openHours?: string;
-  isDeleted?: boolean;
 };
 
 const subFieldSchema = new mongoose.Schema(
@@ -46,10 +45,6 @@ const subFieldSchema = new mongoose.Schema(
       type: String,
     },
 
-    isDeleted: {
-      type: Boolean,
-      default: false,
-    },
   },
   { timestamps: true },
 );

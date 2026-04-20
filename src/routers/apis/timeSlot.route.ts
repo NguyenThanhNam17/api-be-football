@@ -152,9 +152,8 @@ class TimeSlotRoute extends BaseRoute {
     if (!timeSlot) {
       throw ErrorHelper.forbidden("Không tìm thấy timeSlot");
     }
+    await TimeSlotModel.deleteOne({ _id: id });
 
-    timeSlot.isDeleted = true;
-    await timeSlot.save();
     return res.status(200).json({
       status: 200,
       code: "200",

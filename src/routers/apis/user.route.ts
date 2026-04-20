@@ -57,11 +57,6 @@ class UserRoute extends BaseRoute {
       this.route(this.createUser),
     );
     this.router.post(
-      "/updateUser",
-      [this.authentication],
-      this.route(this.updateUser),
-    );
-    this.router.post(
       "/deleteUser",
       [this.authentication],
       this.route(this.deleteUser),
@@ -331,13 +326,10 @@ class UserRoute extends BaseRoute {
   }
 
   async getOneUser(req: Request, res: Response) {
-    const userId = String(req.query.userId || req.body?.userId || "").trim();
-    if (!userId) {
-      throw ErrorHelper.requestDataInvalid("data invalid");
-    }
-    const user = await UserModel.findById(userId);
+    let { id } = req.body;
+    let user = await UserModel.findById(id);
     if (!user) {
-      throw ErrorHelper.userNotExist();
+      throw ErrorHelper.requestDataInvalid("data invalid");
     }
     return res.status(200).json({
       status: 200,
@@ -353,8 +345,8 @@ class UserRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
-    let { name, email, phone, password, role } = req.body;
-    if (!name || !email || !phone || !password || !role) {
+    let { name, email, phone, password } = req.body;
+    if (!name || !email || !phone || !password) {
       throw ErrorHelper.requestDataInvalid("data invalid");
     }
     let user = await UserModel.findOne({
@@ -370,7 +362,7 @@ class UserRoute extends BaseRoute {
       phone: phone,
       key: key,
       password: passwordHash.generate(password),
-      role: role,
+      role: ROLES.USER,
     });
     await user.save();
     return res.status(200).json({
@@ -396,29 +388,8 @@ class UserRoute extends BaseRoute {
     if (!user) {
       throw ErrorHelper.userNotExist();
     }
-    user.isDeleted = true;
-    await user.save();
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "success",
-    });
-  }
 
-  async updateUser(req: Request, res: Response) {
-    const { name, email, phone, password } = req.body;
-    if (!name && !email && !phone && !password) {
-      throw ErrorHelper.requestDataInvalid("data invalid");
-    }
-    const user = await UserModel.findById(req.tokenInfo._id);
-    if (!user) {
-      throw ErrorHelper.userNotExist();
-    }
-    user.name = name || user.name;
-    user.email = email || user.email;
-    user.phone = phone || user.phone;
-    user.password = password ? passwordHash.generate(password) : user.password;
-    await user.save();
+    await UserModel.deleteOne({ _id: userId });
     return res.status(200).json({
       status: 200,
       code: "200",
@@ -433,7 +404,7 @@ class UserRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
-    const { userId, name, email, phone, password, role } = req.body;
+    const { userId, name, email, phone, password } = req.body;
     if (!userId) {
       throw ErrorHelper.requestDataInvalid("data invalid");
     }
@@ -445,7 +416,6 @@ class UserRoute extends BaseRoute {
     user.email = email || user.email;
     user.phone = phone || user.phone;
     user.password = password ? passwordHash.generate(password) : user.password;
-    user.role = role || user.role;
     await user.save();
     return res.status(200).json({
       status: 200,
@@ -566,103 +536,79 @@ class UserRoute extends BaseRoute {
     });
   }
 
-  async deleteUserByAdmin(req: Request, res: Response) {
-    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
-      throw ErrorHelper.permissionDeny();
-    }
-
-    const { userId } = req.body;
-
-    if (!userId || !Types.ObjectId.isValid(userId as string)) {
-      throw ErrorHelper.requestDataInvalid("userId không hợp lệ");
-    }
-
-    const userObjectId = new Types.ObjectId(userId as string);
-
-    const user = await UserModel.findById(userObjectId);
-
-    if (!user) {
-      throw ErrorHelper.userNotExist();
-    }
-
-    if (user._id.toString() === req.tokenInfo._id) {
-      throw ErrorHelper.requestDataInvalid("Không thể xoá chính mình");
-    }
-
-    user.isDeleted = true;
-    await user.save();
-
-    const fields = await FieldModel.find({
-      ownerUserId: userObjectId,
-      isDeleted: false,
-    });
-
-    const fieldIds = fields.map((f) => f._id);
-
-    const hasPaidBooking = await BookingModel.findOne({
-      fieldId: { $in: fieldIds },
-      isDeleted: false,
-      depositStatus: DepositStatusEnum.PAID,
-      status: { $ne: BookingStatusEnum.COMPLETED },
-    });
-
-    if (hasPaidBooking) {
-      throw ErrorHelper.requestDataInvalid(
-        "Không thể xoá owner vì có booking đã được đặt cọc",
-      );
-    }
-
-    if (fieldIds.length > 0) {
-      const bookings = await BookingModel.find({
-        fieldId: { $in: fieldIds },
-        isDeleted: false,
-      });
-
-      const now = new Date();
-
-      for (const booking of bookings) {
-        const bookingDate = new Date(booking.date);
-
-        // ⚠️ Lấy timeslot
-        const timeSlot = await TimeSlotModel.findById(booking.timeSlotId);
-
-        const startTime = timeSlot?.startTime || "00:00";
-        const [hour, minute] = startTime.split(":").map(Number);
-
-        const bookingStartTime = new Date(bookingDate);
-        bookingStartTime.setHours(hour, minute, 0, 0);
-
-        if (bookingStartTime > now) {
-          booking.status = BookingStatusEnum.CANCELLED;
-          booking.cancelReason = "Tài khoản chủ sân đã bị xoá";
-
-          await booking.save();
-          continue;
-        }
-
-        booking.status = BookingStatusEnum.COMPLETED;
-        booking.cancelReason = "Chủ sân bị xoá trong khi đang sử dụng";
-
-        await booking.save();
-      }
-    }
-
-    await FieldModel.updateMany(
-      { ownerUserId: userObjectId },
-      { isDeleted: true },
-    );
-
-    await SubFieldModel.updateMany(
-      { fieldId: { $in: fieldIds } },
-      { isDeleted: true },
-    );
-
-    return res.status(200).json({
-      status: 200,
-      code: "200",
-      message: "Xoá user thành công",
-    });
+ async deleteUserByAdmin(req: Request, res: Response) {
+  if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+    throw ErrorHelper.permissionDeny();
   }
+
+  const { userId } = req.body;
+
+  if (!userId || !Types.ObjectId.isValid(userId)) {
+    throw ErrorHelper.requestDataInvalid("userId không hợp lệ");
+  }
+
+  const userObjectId = new Types.ObjectId(userId);
+
+  const user = await UserModel.findById(userObjectId);
+  if (!user) {
+    throw ErrorHelper.userNotExist();
+  }
+
+  if (user._id.toString() === req.tokenInfo._id) {
+    throw ErrorHelper.requestDataInvalid("Không thể xoá chính mình");
+  }
+
+  // 1. Lấy field
+  const fields = await FieldModel.find({ ownerUserId: userObjectId });
+  const fieldIds = fields.map((f) => f._id);
+
+  // 2. Lấy subField
+  const subFields = await SubFieldModel.find({
+    fieldId: { $in: fieldIds },
+  });
+  const subFieldIds = subFields.map((s) => s._id);
+
+  // 3. Check booking (QUAN TRỌNG - theo subField)
+  const hasActiveBooking = await BookingModel.findOne({
+    subFieldId: { $in: subFieldIds },
+    status: { $ne: BookingStatusEnum.COMPLETED },
+  });
+
+  if (hasActiveBooking) {
+    throw ErrorHelper.requestDataInvalid(
+      "Không thể xoá owner vì sân con đang có booking chưa hoàn thành",
+    );
+  }
+
+  // 🔥 4. XOÁ CỨNG THEO THỨ TỰ
+
+  // xoá booking
+  await BookingModel.deleteMany({
+    subFieldId: { $in: subFieldIds },
+  });
+
+  // xoá subField
+  await SubFieldModel.deleteMany({
+    fieldId: { $in: fieldIds },
+  });
+
+  // xoá field
+  await FieldModel.deleteMany({
+    ownerUserId: userObjectId,
+  });
+
+  // xoá user
+  await UserModel.deleteOne({
+    _id: userObjectId,
+  });
+
+  return res.status(200).json({
+    status: 200,
+    code: "200",
+    message: "success",
+    data: { user },
+  });
+}
 
   async downgradeOwner(req: Request, res: Response) {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
