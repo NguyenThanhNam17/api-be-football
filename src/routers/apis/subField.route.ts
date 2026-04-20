@@ -282,7 +282,6 @@ class SubFieldRoute extends BaseRoute {
 
     const subField = await SubFieldModel.findOne({
       _id: id,
-      isDeleted: false,
     }).populate("fieldId", "name ownerFullName address district rating");
 
     if (!subField) {
@@ -309,7 +308,7 @@ class SubFieldRoute extends BaseRoute {
 
     const subField = await SubFieldModel.findOne({
       _id: id,
-      isDeleted: false,
+
     });
     if (!subField) {
       throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");
@@ -317,7 +316,6 @@ class SubFieldRoute extends BaseRoute {
 
     let field = await FieldModel.findOne({
       _id: subField.fieldId,
-      isDeleted: false,
     });
 
     if (!field) {
@@ -348,7 +346,6 @@ class SubFieldRoute extends BaseRoute {
       const existed = await SubFieldModel.findOne({
         fieldId: subField.fieldId,
         key,
-        isDeleted: false,
       });
 
       if (existed) {
