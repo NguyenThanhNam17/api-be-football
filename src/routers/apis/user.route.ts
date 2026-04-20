@@ -518,7 +518,6 @@ class UserRoute extends BaseRoute {
 
     const users = await UserModel.find({
       isRequestOwner: true,
-      isDeleted: false,
     }).select("name email phone createdAt");
 
     return res.status(200).json({

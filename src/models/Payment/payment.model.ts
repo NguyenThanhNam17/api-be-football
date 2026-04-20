@@ -16,7 +16,6 @@ export type IPayment = BaseDocument & {
   status: PaymentStatusEnum;
   qrCode?: string;
   transactionCode?: string;
-  isDeleted?: boolean;
 };
 
 const paymentSchema = new mongoose.Schema(
@@ -71,11 +70,6 @@ const paymentSchema = new mongoose.Schema(
 
     transactionCode: {
       type: String,
-    },
-
-    isDeleted: {
-      type: Boolean,
-      default: false,
     },
   },
   { timestamps: true }

@@ -40,7 +40,7 @@ class ContactRoute extends BaseRoute {
   }
 
   async getAllContacts(req: Request, res: Response, next: NextFunction) {
-    const contacts = await ContactModel.find({ isDeleted: false })
+    const contacts = await ContactModel.find({})
       .sort({ createdAt: -1 })
       .limit(100);
 
@@ -58,11 +58,7 @@ class ContactRoute extends BaseRoute {
   async deleteContact(req: Request, res: Response, next: NextFunction) {
     const { id } = req.params;
 
-    const contact = await ContactModel.findByIdAndUpdate(
-      id,
-      { isDeleted: true },
-      { new: true }
-    );
+    const contact = await ContactModel.findByIdAndDelete(id);
 
     if (!contact) {
       throw ErrorHelper.forbidden("Không tìm thấy liên hệ");

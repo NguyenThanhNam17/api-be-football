@@ -117,7 +117,6 @@ const canManageBookingPayment = async (tokenInfo: any, booking: any) => {
   const field = await FieldModel.findOne({
     _id: fieldId,
     ownerUserId: tokenInfo._id,
-    isDeleted: false,
   }).select("_id");
 
   return Boolean(field);
@@ -561,7 +560,6 @@ const loadOrderedBookingsForPayment = async (payment: any) => {
   const paymentBookingIds = getPaymentBookingIds(payment);
   const bookings = await BookingModel.find({
     _id: { $in: paymentBookingIds },
-    isDeleted: false,
   }).sort({ createdAt: 1 });
 
   return {
@@ -684,7 +682,6 @@ const syncMomoPaymentFromProviderPayload = async (payload: any) => {
 
   const payment = await PaymentModel.findOne({
     transactionCode: orderId,
-    isDeleted: false,
   });
 
   if (!payment) {
@@ -706,7 +703,6 @@ const syncMomoPaymentFromProviderPayload = async (payload: any) => {
   const paymentBookingIds = getPaymentBookingIds(payment);
   const bookings = await BookingModel.find({
     _id: { $in: paymentBookingIds },
-    isDeleted: false,
   }).sort({ createdAt: 1 });
   const orderedBookings = mapOrderedBookings(bookings, paymentBookingIds);
 
@@ -791,7 +787,6 @@ class PaymentRoute extends BaseRoute {
 
     let bookings = await BookingModel.find({
       _id: { $in: targetBookingIds },
-      isDeleted: false,
     }).sort({ createdAt: 1 });
     let orderedBookings = mapOrderedBookings(bookings, targetBookingIds);
 
@@ -808,7 +803,6 @@ class PaymentRoute extends BaseRoute {
     await expireStalePendingBookings({ _id: { $in: targetBookingIds } }, new Date());
     bookings = await BookingModel.find({
       _id: { $in: targetBookingIds },
-      isDeleted: false,
     }).sort({ createdAt: 1 });
     orderedBookings = mapOrderedBookings(bookings, targetBookingIds);
 
@@ -842,7 +836,6 @@ class PaymentRoute extends BaseRoute {
         { bookingIds: { $in: targetBookingIds } },
       ],
       status: PaymentStatusEnum.PENDING,
-      isDeleted: false,
     }).sort({ createdAt: -1 });
 
     for (const existingPayment of existingPayments) {
@@ -976,7 +969,6 @@ class PaymentRoute extends BaseRoute {
     const paymentBookingIds = getPaymentBookingIds(payment);
     const bookings = await BookingModel.find({
       _id: { $in: paymentBookingIds },
-      isDeleted: false,
     }).sort({ createdAt: 1 });
     const orderedBookings = mapOrderedBookings(bookings, paymentBookingIds);
 
@@ -1019,7 +1011,6 @@ class PaymentRoute extends BaseRoute {
     const paymentBookingIds = getPaymentBookingIds(payment);
     const bookings = await BookingModel.find({
       _id: { $in: paymentBookingIds },
-      isDeleted: false,
     }).sort({ createdAt: 1 });
     const orderedBookings = mapOrderedBookings(bookings, paymentBookingIds);
 
@@ -1120,7 +1111,6 @@ class PaymentRoute extends BaseRoute {
   async getMyPayments(req: Request, res: Response) {
     const payments = await PaymentModel.find({
       userId: new Types.ObjectId(req.tokenInfo._id),
-      isDeleted: false,
     }).populate("bookingId").sort({ createdAt: -1 });
 
     await Promise.all(
@@ -1143,7 +1133,6 @@ class PaymentRoute extends BaseRoute {
         { bookingId: normalizedBookingId },
         { bookingIds: normalizedBookingId },
       ],
-      isDeleted: false,
     }).sort({ createdAt: -1 });
 
     await Promise.all(
@@ -1179,4 +1168,3 @@ class PaymentRoute extends BaseRoute {
 }
 
 export default new PaymentRoute().router;
-

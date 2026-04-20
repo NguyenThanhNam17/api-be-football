@@ -8,11 +8,7 @@ import {
 import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
-import {
-  BookingStatusEnum,
-  FieldStatusEnum,
-  TypeFieldEnum,
-} from "../../constants/model.const";
+import { BookingStatusEnum, FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
 import { FieldModel } from "../../models/field/field.model";
 import { SubFieldModel } from "../../models/subField/subField.model";
 import {
@@ -133,21 +129,22 @@ class SubFieldRoute extends BaseRoute {
     }
 
     // 4. Check field tồn tại
-    let field = await FieldModel.findById(fieldId);
+    const field = await FieldModel.findById(fieldId);
     if (!field) {
       throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
     }
 
-    if (field.status !== FieldStatusEnum.APPROVED && field.status !== FieldStatusEnum.PENDING){
-      throw ErrorHelper.forbidden("Sân chưa được duyệt");
+    // 5. Chỉ cho tạo nếu field đã APPROVED
+    if (field.status !== FieldStatusEnum.APPROVED) {
+      throw ErrorHelper.requestDataInvalid("Sân chưa được duyệt");
     }
 
-      if (req.tokenInfo.role_ === ROLES.OWNER) {
-        // 6. Check quyền OWNER
-        if (field.ownerUserId.toString() !== req.tokenInfo._id) {
-          throw ErrorHelper.permissionDeny();
-        }
+    // 6. Check quyền OWNER
+    if (req.tokenInfo.role_ === ROLES.OWNER) {
+      if (field.ownerUserId.toString() !== req.tokenInfo._id) {
+        throw ErrorHelper.permissionDeny();
       }
+    }
 
     // 7. Check trùng key trong cùng field
     const existed = await SubFieldModel.findOne({
@@ -180,13 +177,12 @@ class SubFieldRoute extends BaseRoute {
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "success",
+      message: "Tạo sân con thành công",
       data: {
         subField,
       },
     });
   }
-
   async getSubField(req: Request, res: Response) {
     const { id } = req.params;
 
@@ -308,7 +304,6 @@ class SubFieldRoute extends BaseRoute {
 
     const subField = await SubFieldModel.findOne({
       _id: id,
-
     });
     if (!subField) {
       throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");

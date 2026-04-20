@@ -6,7 +6,6 @@ export type IContact = BaseDocument & {
   email: string;
   phone?: string;
   message: string;
-  isDeleted?: boolean;
 };
 
 const contactSchema = new mongoose.Schema(
@@ -29,7 +28,6 @@ const contactSchema = new mongoose.Schema(
       type: String, 
       required: true 
     },
-    isDeleted: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

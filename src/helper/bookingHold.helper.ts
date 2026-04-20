@@ -78,7 +78,6 @@ export const expireStalePendingBookings = async (
   const expireBefore = new Date(now.getTime() - BOOKING_HOLD_DURATION_MS);
   const staleBookings = await BookingModel.find({
     ...filter,
-    isDeleted: false,
     status: BookingStatusEnum.PENDING,
     depositStatus: { $ne: DepositStatusEnum.PAID },
     createdAt: { $lte: expireBefore },
@@ -101,7 +100,6 @@ export const expireStalePendingBookings = async (
         { bookingId: { $in: staleIds } },
         { bookingIds: { $in: staleIds } },
       ],
-      isDeleted: false,
       status: PaymentStatusEnum.PENDING,
     },
     { $set: { status: PaymentStatusEnum.FAILED } },
@@ -118,7 +116,6 @@ export const buildActiveBookingFilter = (
 
   return {
     ...filter,
-    isDeleted: false,
     $or: [
       {
         status: {

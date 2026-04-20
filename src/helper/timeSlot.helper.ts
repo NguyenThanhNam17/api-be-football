@@ -144,23 +144,18 @@ const ensureRequiredTimeSlotEntries = async (
     const existingSlot = existingSlotsByIdentity.get(identity);
 
     if (existingSlot) {
-      return operations;
-    }
-
-    if (existingSlot?._id) {
-      operations.push({
-        updateOne: {
-          filter: { _id: existingSlot._id },
-          update: {
-            $set: {
-              startTime: slot.startTime,
-              endTime: slot.endTime,
-              label: slot.label,
-              isDeleted: false,
+      if (String(existingSlot?.label || "").trim() !== String(slot.label || "").trim()) {
+        operations.push({
+          updateOne: {
+            filter: { _id: existingSlot._id },
+            update: {
+              $set: {
+                label: slot.label,
+              },
             },
           },
-        },
-      });
+        });
+      }
       return operations;
     }
 
@@ -169,14 +164,12 @@ const ensureRequiredTimeSlotEntries = async (
         filter: {
           startTime: slot.startTime,
           endTime: slot.endTime,
-          isDeleted: false,
         },
         update: {
           $setOnInsert: {
             startTime: slot.startTime,
             endTime: slot.endTime,
             label: slot.label,
-            isDeleted: false,
           },
         },
         upsert: true,
@@ -204,8 +197,8 @@ export const ensureTimeSlotsForOpenHoursList = async (openHoursValues: unknown[]
 
 export const syncTimeSlotsFromStoredOpenHours = async () => {
   const [fields, subFields] = await Promise.all([
-    FieldModel.find({ isDeleted: false }).select("openHours").lean(),
-    SubFieldModel.find({ isDeleted: false }).select("openHours").lean(),
+    FieldModel.find({}).select("openHours").lean(),
+    SubFieldModel.find({}).select("openHours").lean(),
   ]);
 
   const collectedOpenHours = [...fields, ...subFields]

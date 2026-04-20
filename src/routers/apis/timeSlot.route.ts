@@ -107,8 +107,8 @@ class TimeSlotRoute extends BaseRoute {
   async getAllTimeSlot(req: Request, res: Response) {
     await syncTimeSlotsFromStoredOpenHours();
 
-    const timeSlots = await TimeSlotModel.find({
-    })
+    const timeSlots = await TimeSlotModel.find({}).sort({ startTime: 1 });
+
     return res.status(200).json({
       status: 200,
       code: "200",

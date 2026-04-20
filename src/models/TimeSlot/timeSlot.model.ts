@@ -47,7 +47,6 @@ timeSlotSchema.index(
   { startTime: 1, endTime: 1 },
   {
     unique: true,
-    partialFilterExpression: { isDeleted: false },
   }
 );
 

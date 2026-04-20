@@ -536,27 +536,40 @@ class BookingRoute extends BaseRoute {
   }
 
   async createBooking(req: Request, res: Response) {
-    const { subFieldId, timeSlotId, date, phone, note } = req.body;
-    if (!subFieldId || !timeSlotId || !date || !phone) {
-      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu");
+    const rawSubFieldId = String(req.body?.subFieldId || "").trim();
+    const rawTimeSlotId = String(req.body?.timeSlotId || "").trim();
+    const rawDate = String(req.body?.date || "").trim();
+    const rawPhone = String(req.body?.phone || "").trim();
+    const rawNote = String(req.body?.note || "").trim();
+
+    if (!rawSubFieldId || !rawTimeSlotId || !rawDate || !rawPhone) {
+      throw ErrorHelper.requestDataInvalid("Thiếu dữ liệu bắt buộc");
     }
 
-    if (
-      !Types.ObjectId.isValid(subFieldId) ||
-      !Types.ObjectId.isValid(timeSlotId)
-    ) {
-      throw ErrorHelper.forbidden("Id không hợp lệ");
+    if (!Types.ObjectId.isValid(rawSubFieldId)) {
+      throw ErrorHelper.requestDataInvalid("subFieldId không hợp lệ");
     }
 
-    let subField = await SubFieldModel.findOne({
-      _id: subFieldId,
+    if (!Types.ObjectId.isValid(rawTimeSlotId)) {
+      throw ErrorHelper.requestDataInvalid("timeSlotId không hợp lệ");
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+      throw ErrorHelper.requestDataInvalid("Ngày đặt phải theo định dạng YYYY-MM-DD");
+    }
+
+    const subFieldObjectId = new Types.ObjectId(rawSubFieldId);
+    const timeSlotObjectId = new Types.ObjectId(rawTimeSlotId);
+
+    const subField = await SubFieldModel.findOne({
+      _id: subFieldObjectId,
     });
 
     if (!subField) {
-      throw ErrorHelper.forbidden("Sân không tồn tại");
+      throw ErrorHelper.forbidden("Sân con không tồn tại");
     }
 
-    let field = await FieldModel.findOne({
+    const field = await FieldModel.findOne({
       _id: subField.fieldId,
     });
 
@@ -564,26 +577,55 @@ class BookingRoute extends BaseRoute {
       throw ErrorHelper.forbidden("Sân không tồn tại");
     }
 
-    let timeSlot = await TimeSlotModel.findOne({
-      _id: timeSlotId,
+    const fieldStatus = String(field?.status || "").trim().toUpperCase();
+    if (
+      fieldStatus === "PENDING" ||
+      fieldStatus === "REJECTED"
+    ) {
+      throw ErrorHelper.requestDataInvalid("Sân chưa sẵn sàng để đặt");
+    }
+
+    if (fieldStatus === "LOCKED" || Boolean((field as any)?.isLocked)) {
+      throw ErrorHelper.requestDataInvalid("Sân đang bị khóa, không thể đặt");
+    }
+
+    const timeSlot = await TimeSlotModel.findOne({
+      _id: timeSlotObjectId,
     });
 
     if (!timeSlot) {
-      throw ErrorHelper.forbidden("Thời gian không tồn tại");
+      throw ErrorHelper.forbidden("Khung giờ không tồn tại");
     }
 
-    const bookingDate = new Date(date);
-
-    if (bookingDate < new Date()) {
-      throw ErrorHelper.requestDataInvalid("Không thể đặt lịch trong quá khứ");
+    const bookingDate = new Date(rawDate);
+    if (Number.isNaN(bookingDate.getTime())) {
+      throw ErrorHelper.requestDataInvalid("Ngày đặt không hợp lệ");
     }
 
     const now = new Date();
+    const nowVi = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const todayVi = `${nowVi.getUTCFullYear()}-${String(
+      nowVi.getUTCMonth() + 1,
+    ).padStart(2, "0")}-${String(nowVi.getUTCDate()).padStart(2, "0")}`;
+
+    if (rawDate < todayVi) {
+      throw ErrorHelper.requestDataInvalid("Không thể đặt lịch trong quá khứ");
+    }
+
+    const slotStartMinutes = timeStringToMinutes(String(timeSlot?.startTime || ""));
+    const nowViMinutes = nowVi.getUTCHours() * 60 + nowVi.getUTCMinutes();
+    if (
+      rawDate === todayVi &&
+      Number.isFinite(slotStartMinutes) &&
+      Number(slotStartMinutes) <= nowViMinutes
+    ) {
+      throw ErrorHelper.requestDataInvalid("Khung giờ đã qua, vui lòng chọn khung giờ khác");
+    }
 
     await expireStalePendingBookings(
       {
-        subFieldId: new Types.ObjectId(subFieldId),
-        timeSlotId: new Types.ObjectId(timeSlotId),
+        subFieldId: subFieldObjectId,
+        timeSlotId: timeSlotObjectId,
         date: bookingDate,
       },
       now,
@@ -592,8 +634,8 @@ class BookingRoute extends BaseRoute {
     const existed = await BookingModel.findOne(
       buildActiveBookingFilter(
         {
-          subFieldId: new Types.ObjectId(subFieldId),
-          timeSlotId: new Types.ObjectId(timeSlotId),
+          subFieldId: subFieldObjectId,
+          timeSlotId: timeSlotObjectId,
           date: bookingDate,
         },
         now,
@@ -616,11 +658,11 @@ class BookingRoute extends BaseRoute {
       const booking = new BookingModel({
         userId: req.tokenInfo?._id || null,
         fieldId: field._id,
-        subFieldId,
-        timeSlotId,
+        subFieldId: subFieldObjectId,
+        timeSlotId: timeSlotObjectId,
         date: bookingDate,
-        phone,
-        note,
+        phone: rawPhone,
+        note: rawNote,
         totalPrice,
         depositAmount,
         remainingAmount,
@@ -645,7 +687,6 @@ class BookingRoute extends BaseRoute {
       throw err;
     }
   }
-
   async getBooking(req: Request, res: Response) {
     const { id } = req.params;
 

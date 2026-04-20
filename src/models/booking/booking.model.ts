@@ -113,7 +113,6 @@ bookingSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      isDeleted: false,
       status: { $in: ["PENDING", "CONFIRMED"] },
     },
   },
@@ -127,7 +126,6 @@ const hasExpectedActiveSlotPartialFilter = (partialFilterExpression: any) => {
   const statuses = partialFilterExpression?.status?.$in;
 
   return (
-    partialFilterExpression?.isDeleted === false &&
     Array.isArray(statuses) &&
     statuses.length === 2 &&
     statuses.includes(BookingStatusEnum.PENDING) &&
@@ -159,7 +157,6 @@ export const ensureBookingIndexes = async () => {
       name: BOOKING_SLOT_UNIQUE_INDEX_NAME,
       unique: true,
       partialFilterExpression: {
-        isDeleted: false,
         status: {
           $in: [BookingStatusEnum.PENDING, BookingStatusEnum.CONFIRMED],
         },

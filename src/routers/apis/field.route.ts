@@ -215,7 +215,6 @@ class FieldRoute extends BaseRoute {
     const existedAddress = await FieldModel.findOne({
       address: { $regex: `^${normalizedAddress}$`, $options: "i" },
       district: { $regex: `^${normalizedDistrict}$`, $options: "i" },
-      isDeleted: false,
     });
 
     if (existedAddress) {
