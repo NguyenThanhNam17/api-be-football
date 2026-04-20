@@ -11,7 +11,9 @@ import { ROLES } from "../../constants/role.const";
 import { FieldModel } from "../../models/field/field.model";
 import {
   BookingStatusEnum,
+  DepositStatusEnum,
   FieldStatusEnum,
+  PaymentStatusEnum,
   TypeFieldEnum,
 } from "../../constants/model.const";
 import {
@@ -20,6 +22,7 @@ import {
 } from "../../helper/timeSlot.helper";
 import { SubFieldModel } from "../../models/subField/subField.model";
 import { BookingModel } from "../../models/booking/booking.model";
+import { PaymentModel } from "../../models/Payment/payment.model";
 
 class FieldRoute extends BaseRoute {
   constructor() {
@@ -288,52 +291,76 @@ class FieldRoute extends BaseRoute {
     const { id } = req.params;
 
     if (!id) {
-      throw ErrorHelper.requestDataInvalid("Thiếu id sân");
+      throw ErrorHelper.requestDataInvalid("Thieu id san");
     }
 
     const field = await FieldModel.findById(id);
     if (!field) {
-      throw ErrorHelper.requestDataInvalid("Không tìm thấy sân");
+      throw ErrorHelper.requestDataInvalid("Khong tim thay san");
     }
 
-    // check quyền
     const isOwner =
       req.tokenInfo.role_ === ROLES.OWNER &&
-      field.ownerUserId.toString() === req.tokenInfo._id;
-
+      String(field.ownerUserId || "") === String(req.tokenInfo._id || "");
     const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
 
-    if (!isOwner && !isAdmin) {
+    if (!isAdmin && !isOwner) {
       throw ErrorHelper.permissionDeny();
     }
 
-    // lấy subField
-    const subFields = await SubFieldModel.find({ fieldId: id });
-    const subFieldIds = subFields.map((s: any) => s._id);
+    const subFields = await SubFieldModel.find({ fieldId: id }).select("_id");
+    const subFieldIds = subFields.map((item: any) => item._id);
 
-    // check booking
-    const hasBooking = await BookingModel.findOne({
-      subFieldId: { $in: subFieldIds },
-      status: { $ne: BookingStatusEnum.COMPLETED },
-    });
+    const bookingFilter: any = {
+      $or: [{ fieldId: field._id }],
+    };
 
-    if (hasBooking) {
-      throw ErrorHelper.requestDataInvalid(
-        "Sân đang có booking chưa hoàn thành",
-      );
+    if (subFieldIds.length > 0) {
+      bookingFilter.$or.push({
+        subFieldId: { $in: subFieldIds },
+      });
     }
 
-    // xoá booking
-    await BookingModel.deleteMany({
-      subFieldId: { $in: subFieldIds },
-    });
+    const relatedBookings = await BookingModel.find(bookingFilter).select(
+      "_id status depositStatus",
+    );
 
-    // xoá subField
+    if (relatedBookings.length > 0) {
+      const bookingIds = relatedBookings.map((booking: any) => booking._id);
+      const hasDepositPaid = relatedBookings.some(
+        (booking: any) =>
+          String(booking?.depositStatus || "").trim().toUpperCase() ===
+          DepositStatusEnum.PAID,
+      );
+      const hasConfirmedOrCompleted = relatedBookings.some((booking: any) =>
+        [BookingStatusEnum.CONFIRMED, BookingStatusEnum.COMPLETED].includes(
+          String(booking?.status || "").trim().toUpperCase() as BookingStatusEnum,
+        ),
+      );
+
+      const hasPaidPayment = Boolean(
+        await PaymentModel.findOne({
+          $or: [
+            { bookingId: { $in: bookingIds } },
+            { bookingIds: { $in: bookingIds } },
+          ],
+          status: PaymentStatusEnum.PAID,
+        }).select("_id"),
+      );
+
+      if (hasDepositPaid || hasConfirmedOrCompleted || hasPaidPayment) {
+        throw ErrorHelper.requestDataInvalid(
+          "San da co nguoi dat/coc/thanh toan nen khong the xoa",
+        );
+      }
+
+      throw ErrorHelper.requestDataInvalid("San da co nguoi dat nen khong the xoa");
+    }
+
     await SubFieldModel.deleteMany({
       fieldId: id,
     });
 
-    // xoá field
     await FieldModel.deleteOne({ _id: id });
 
     return res.status(200).json({
