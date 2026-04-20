@@ -30,7 +30,7 @@ class SubFieldRoute extends BaseRoute {
     );
     this.router.get("/getSubField/:id", this.route(this.getSubField));
     this.router.post(
-      "/deleteSubField/:id",
+      "/deleteSubField",
       [this.authentication],
       this.route(this.deleteSubField),
     );
@@ -102,68 +102,88 @@ class SubFieldRoute extends BaseRoute {
 
   async createSubField(req: Request, res: Response) {
     let { fieldId, key, name, type, pricePerHour, openHours } = req.body;
+
+    // 1. Validate input cơ bản
     if (!fieldId || !key || !name || !type || pricePerHour === undefined) {
       throw ErrorHelper.requestDataInvalid("Missing required fields");
     }
+
+    if (pricePerHour < 0) {
+      throw ErrorHelper.requestDataInvalid("Giá phải >= 0");
+    }
+
+    // 2. Validate type sân
+    if (!Object.values(TypeFieldEnum).includes(type)) {
+      throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
+    }
+
+    // 3. Validate openHours (optional)
     if (openHours && typeof openHours !== "string") {
       throw ErrorHelper.requestDataInvalid("openHours phải là string");
     }
 
     if (openHours && !parseOpenHoursRange(openHours)) {
-      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+      throw ErrorHelper.requestDataInvalid(
+        "Giờ mở cửa phải đúng định dạng HH:mm-HH:mm",
+      );
     }
 
-    if (!Object.values(TypeFieldEnum).includes(type)) {
-      throw ErrorHelper.requestDataInvalid("Loại sân không hợp lệ");
-    }
-
-    if (pricePerHour < 0) {
-      throw ErrorHelper.requestDataInvalid("Giá phải lớn hơn hoặc bằng 0");
-    }
-
-    const field = await FieldModel.findOne({ _id: fieldId});
+    // 4. Check field tồn tại
+    const field = await FieldModel.findById(fieldId);
     if (!field) {
       throw ErrorHelper.requestDataInvalid("Sân không tồn tại");
     }
 
-    if (
-      req.tokenInfo.role_ === ROLES.OWNER &&
-      field.ownerUserId.toString() !== req.tokenInfo._id
-    ) {
-      throw ErrorHelper.permissionDeny();
+    // 5. Chỉ cho tạo nếu field đã APPROVED
+    if (field.status !== FieldStatusEnum.APPROVED) {
+      throw ErrorHelper.requestDataInvalid("Sân chưa được duyệt");
     }
 
+    // 6. Check quyền OWNER
+    if (req.tokenInfo.role_ === ROLES.OWNER) {
+      if (field.ownerUserId.toString() !== req.tokenInfo._id) {
+        throw ErrorHelper.permissionDeny();
+      }
+    }
+
+    // 7. Check trùng key trong cùng field
     const existed = await SubFieldModel.findOne({
       fieldId,
       key,
+      isDeleted: false,
     });
 
     if (existed) {
-      throw ErrorHelper.requestDataInvalid("Sân con đã tồn tại (trùng key)");
+      throw ErrorHelper.requestDataInvalid("Key sân con đã tồn tại");
     }
 
+    // 8. Tạo subField
     const subField = new SubFieldModel({
       fieldId,
       key,
       name,
       type,
       pricePerHour,
-      openHours,
+      openHours: openHours || field.openHours, // fallback
     });
 
     await subField.save();
-    await ensureTimeSlotsForOpenHoursList([openHours, field.openHours]);
 
+    // 9. Tạo timeSlot an toàn (fix bug undefined)
+    await ensureTimeSlotsForOpenHoursList(
+      [openHours, field.openHours].filter(Boolean),
+    );
+
+    // 10. Response
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "success",
+      message: "Tạo sân con thành công",
       data: {
         subField,
       },
     });
   }
-
   async getSubField(req: Request, res: Response) {
     const { id } = req.params;
 
@@ -189,66 +209,66 @@ class SubFieldRoute extends BaseRoute {
     });
   }
 
-async deleteSubField(req: Request, res: Response) {
-  const { id } = req.body;
+  async deleteSubField(req: Request, res: Response) {
+    const { id } = req.body;
 
-  if (!id) {
-    throw ErrorHelper.requestDataInvalid("Thiếu id sân con");
-  }
+    if (!id) {
+      throw ErrorHelper.requestDataInvalid("Thiếu id sân con");
+    }
 
-  const subField = await SubFieldModel.findById(id);
-  if (!subField) {
-    throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");
-  }
+    const subField = await SubFieldModel.findById(id);
+    if (!subField) {
+      throw ErrorHelper.requestDataInvalid("Sân con không tồn tại");
+    }
 
-  const field = await FieldModel.findById(subField.fieldId);
+    const field = await FieldModel.findById(subField.fieldId);
 
-  // nếu field đã bị xoá → xoá luôn subField
-  if (!field) {
+    // nếu field đã bị xoá → xoá luôn subField
+    if (!field) {
+      await SubFieldModel.deleteOne({ _id: id });
+
+      return res.status(200).json({
+        status: 200,
+        code: "200",
+        message: "Sân cha không tồn tại, đã xoá sân con",
+      });
+    }
+
+    // check quyền
+    const isOwner =
+      req.tokenInfo.role_ === ROLES.OWNER &&
+      field.ownerUserId.toString() === req.tokenInfo._id;
+
+    const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
+
+    if (!isOwner && !isAdmin) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    // check booking
+    const hasBooking = await BookingModel.findOne({
+      subFieldId: id,
+      status: { $ne: BookingStatusEnum.COMPLETED },
+    });
+
+    if (hasBooking) {
+      throw ErrorHelper.requestDataInvalid(
+        "Sân đang có booking chưa hoàn thành",
+      );
+    }
+
+    // xoá booking liên quan
+    await BookingModel.deleteMany({ subFieldId: id });
+
+    // xoá subField
     await SubFieldModel.deleteOne({ _id: id });
 
     return res.status(200).json({
       status: 200,
       code: "200",
-      message: "Sân cha không tồn tại, đã xoá sân con",
+      message: "Xoá sân con thành công",
     });
   }
-
-  // check quyền
-  const isOwner =
-    req.tokenInfo.role_ === ROLES.OWNER &&
-    field.ownerUserId.toString() === req.tokenInfo._id;
-
-  const isAdmin = req.tokenInfo.role_ === ROLES.ADMIN;
-
-  if (!isOwner && !isAdmin) {
-    throw ErrorHelper.permissionDeny();
-  }
-
-  // check booking
-  const hasBooking = await BookingModel.findOne({
-    subFieldId: id,
-    status: { $ne: BookingStatusEnum.COMPLETED },
-  });
-
-  if (hasBooking) {
-    throw ErrorHelper.requestDataInvalid(
-      "Sân đang có booking chưa hoàn thành",
-    );
-  }
-
-  // xoá booking liên quan
-  await BookingModel.deleteMany({ subFieldId: id });
-
-  // xoá subField
-  await SubFieldModel.deleteOne({ _id: id });
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "Xoá sân con thành công",
-  });
-}
 
   async getSubFieldDetail(req: Request, res: Response) {
     const { id } = req.params;
@@ -316,7 +336,9 @@ async deleteSubField(req: Request, res: Response) {
     }
 
     if (openHours && !parseOpenHoursRange(openHours)) {
-      throw ErrorHelper.requestDataInvalid("Giờ mở cửa phải đúng định dạng HH:mm-HH:mm");
+      throw ErrorHelper.requestDataInvalid(
+        "Giờ mở cửa phải đúng định dạng HH:mm-HH:mm",
+      );
     }
 
     if (key && key !== subField.key) {
@@ -344,7 +366,10 @@ async deleteSubField(req: Request, res: Response) {
     if (openHours !== undefined) subField.openHours = openHours;
 
     await subField.save();
-    await ensureTimeSlotsForOpenHoursList([subField.openHours, field.openHours]);
+    await ensureTimeSlotsForOpenHoursList([
+      subField.openHours,
+      field.openHours,
+    ]);
 
     return res.status(200).json({
       status: 200,

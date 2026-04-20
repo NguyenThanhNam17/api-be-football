@@ -143,9 +143,9 @@ class FieldRoute extends BaseRoute {
   async getAllField(req: Request, res: Response) {
     let fields = await FieldModel.find({
       status: FieldStatusEnum.APPROVED,
-    });
+    }).populate("ownerUserId", "name phone");
     if (!fields) {
-      throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
+      throw ErrorHelper.forbidden("Không tìm thấy sân nào");
     }
     return res.status(200).json({
       status: 200,
@@ -160,7 +160,7 @@ class FieldRoute extends BaseRoute {
       throw ErrorHelper.permissionDeny();
     }
 
-    let fields = await FieldModel.find({});
+    let fields = await FieldModel.find({}).populate("ownerUserId", "name phone");
     if (!fields) {
       throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
     }
@@ -354,7 +354,7 @@ async getAllFieldForOwner(req: Request, res: Response) {
 
   let fields = await FieldModel.find({
     ownerUserId: req.tokenInfo._id,
-  });
+  }).populate("ownerUserId", "name phone");;
 
   if (!fields || fields.length === 0) {
     throw ErrorHelper.requestDataInvalid("Không tìm thấy sân nào");
