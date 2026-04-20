@@ -29,10 +29,12 @@ import { FieldModel } from "../../models/field/field.model";
 import {
   BookingStatusEnum,
   DepositStatusEnum,
+  PaymentStatusEnum,
 } from "../../constants/model.const";
 import { TimeSlotModel } from "../../models/TimeSlot/timeSlot.model";
 import { Types } from "mongoose";
 import { SubFieldModel } from "../../models/subField/subField.model";
+import { PaymentModel } from "../../models/Payment/payment.model";
 
 class UserRoute extends BaseRoute {
   constructor() {
@@ -400,20 +402,99 @@ class UserRoute extends BaseRoute {
   });
 }
 
+  private async deleteUserWithOwnerConstraints(userObjectId: Types.ObjectId) {
+    const fields = await FieldModel.find({ ownerUserId: userObjectId }).select("_id");
+    const fieldIds = fields.map((field: any) => field._id);
+
+    if (fieldIds.length === 0) {
+      await UserModel.deleteOne({ _id: userObjectId });
+      return;
+    }
+
+    const subFields = await SubFieldModel.find({
+      fieldId: { $in: fieldIds },
+    }).select("_id");
+    const subFieldIds = subFields.map((subField: any) => subField._id);
+
+    const bookingFilter: any = {
+      $or: [{ fieldId: { $in: fieldIds } }],
+    };
+
+    if (subFieldIds.length > 0) {
+      bookingFilter.$or.push({
+        subFieldId: { $in: subFieldIds },
+      });
+    }
+
+    const relatedBookings = await BookingModel.find(bookingFilter).select(
+      "_id status depositStatus",
+    );
+
+    if (relatedBookings.length > 0) {
+      const bookingIds = relatedBookings.map((booking: any) => booking._id);
+      const hasDepositPaid = relatedBookings.some(
+        (booking: any) =>
+          String(booking?.depositStatus || "").trim().toUpperCase() ===
+          DepositStatusEnum.PAID,
+      );
+      const hasActiveOrCompletedBooking = relatedBookings.some((booking: any) =>
+        [
+          BookingStatusEnum.PENDING,
+          BookingStatusEnum.CONFIRMED,
+          BookingStatusEnum.COMPLETED,
+        ].includes(
+          String(booking?.status || "").trim().toUpperCase() as BookingStatusEnum,
+        ),
+      );
+      const hasPaidPayment = Boolean(
+        await PaymentModel.findOne({
+          $or: [
+            { bookingId: { $in: bookingIds } },
+            { bookingIds: { $in: bookingIds } },
+          ],
+          status: PaymentStatusEnum.PAID,
+        }).select("_id"),
+      );
+
+      if (hasDepositPaid || hasPaidPayment || hasActiveOrCompletedBooking) {
+        throw ErrorHelper.requestDataInvalid(
+          "Khong the xoa chu san vi san da co nguoi dat/coc/thanh toan",
+        );
+      }
+
+      throw ErrorHelper.requestDataInvalid("Khong the xoa chu san vi san da co nguoi dat");
+    }
+
+    await SubFieldModel.deleteMany({
+      fieldId: { $in: fieldIds },
+    });
+    await FieldModel.deleteMany({
+      ownerUserId: userObjectId,
+    });
+    await UserModel.deleteOne({ _id: userObjectId });
+  }
+
   async deleteUser(req: Request, res: Response) {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
     const { userId } = req.body;
-    if (!userId) {
-      throw ErrorHelper.requestDataInvalid("data invalid");
+    if (!userId || !Types.ObjectId.isValid(userId)) {
+      throw ErrorHelper.requestDataInvalid("userId khong hop le");
     }
-    const user = await UserModel.findById(userId);
+
+    const userObjectId = new Types.ObjectId(userId);
+    const user = await UserModel.findById(userObjectId);
     if (!user) {
       throw ErrorHelper.userNotExist();
     }
 
-    await UserModel.deleteOne({ _id: userId });
+    if (user._id.toString() === req.tokenInfo._id) {
+      throw ErrorHelper.requestDataInvalid("Khong the xoa chinh minh");
+    }
+
+    await this.deleteUserWithOwnerConstraints(userObjectId);
+
     return res.status(200).json({
       status: 200,
       code: "200",
@@ -557,80 +638,36 @@ class UserRoute extends BaseRoute {
       data: { user },
     });
   }
+  async deleteUserByAdmin(req: Request, res: Response) {
+    if (req.tokenInfo.role_ !== ROLES.ADMIN) {
+      throw ErrorHelper.permissionDeny();
+    }
 
- async deleteUserByAdmin(req: Request, res: Response) {
-  if (req.tokenInfo.role_ !== ROLES.ADMIN) {
-    throw ErrorHelper.permissionDeny();
+    const { userId } = req.body;
+
+    if (!userId || !Types.ObjectId.isValid(userId)) {
+      throw ErrorHelper.requestDataInvalid("userId khong hop le");
+    }
+
+    const userObjectId = new Types.ObjectId(userId);
+    const user = await UserModel.findById(userObjectId);
+    if (!user) {
+      throw ErrorHelper.userNotExist();
+    }
+
+    if (user._id.toString() === req.tokenInfo._id) {
+      throw ErrorHelper.requestDataInvalid("Khong the xoa chinh minh");
+    }
+
+    await this.deleteUserWithOwnerConstraints(userObjectId);
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: { user },
+    });
   }
-
-  const { userId } = req.body;
-
-  if (!userId || !Types.ObjectId.isValid(userId)) {
-    throw ErrorHelper.requestDataInvalid("userId không hợp lệ");
-  }
-
-  const userObjectId = new Types.ObjectId(userId);
-
-  const user = await UserModel.findById(userObjectId);
-  if (!user) {
-    throw ErrorHelper.userNotExist();
-  }
-
-  if (user._id.toString() === req.tokenInfo._id) {
-    throw ErrorHelper.requestDataInvalid("Không thể xoá chính mình");
-  }
-
-  // 1. Lấy field
-  const fields = await FieldModel.find({ ownerUserId: userObjectId });
-  const fieldIds = fields.map((f) => f._id);
-
-  // 2. Lấy subField
-  const subFields = await SubFieldModel.find({
-    fieldId: { $in: fieldIds },
-  });
-  const subFieldIds = subFields.map((s) => s._id);
-
-  // 3. Check booking (QUAN TRỌNG - theo subField)
-  const hasActiveBooking = await BookingModel.findOne({
-    subFieldId: { $in: subFieldIds },
-    status: { $ne: BookingStatusEnum.COMPLETED },
-  });
-
-  if (hasActiveBooking) {
-    throw ErrorHelper.requestDataInvalid(
-      "Không thể xoá owner vì sân con đang có booking chưa hoàn thành",
-    );
-  }
-
-  // 🔥 4. XOÁ CỨNG THEO THỨ TỰ
-
-  // xoá booking
-  await BookingModel.deleteMany({
-    subFieldId: { $in: subFieldIds },
-  });
-
-  // xoá subField
-  await SubFieldModel.deleteMany({
-    fieldId: { $in: fieldIds },
-  });
-
-  // xoá field
-  await FieldModel.deleteMany({
-    ownerUserId: userObjectId,
-  });
-
-  // xoá user
-  await UserModel.deleteOne({
-    _id: userObjectId,
-  });
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data: { user },
-  });
-}
 
   async downgradeOwner(req: Request, res: Response) {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
