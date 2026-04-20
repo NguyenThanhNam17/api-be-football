@@ -8,7 +8,7 @@ import {
 import { UserModel } from "../../models/user/user.model";
 import { TokenHelper } from "../../helper/token.helper";
 import { ROLES } from "../../constants/role.const";
-import { BookingStatusEnum, TypeFieldEnum } from "../../constants/model.const";
+import { BookingStatusEnum, FieldStatusEnum, TypeFieldEnum } from "../../constants/model.const";
 import { FieldModel } from "../../models/field/field.model";
 import { SubFieldModel } from "../../models/subField/subField.model";
 import {
