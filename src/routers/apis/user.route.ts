@@ -407,34 +407,6 @@ class UserRoute extends BaseRoute {
     const fieldIds = fields.map((field: any) => field._id);
 
     if (fieldIds.length === 0) {
-      const userBookings = await BookingModel.find({
-        userId: userObjectId,
-      }).select("_id depositStatus");
-
-      if (userBookings.length > 0) {
-        const bookingIds = userBookings.map((booking: any) => booking._id);
-        const hasDepositPaid = userBookings.some(
-          (booking: any) =>
-            String(booking?.depositStatus || "").trim().toUpperCase() ===
-            DepositStatusEnum.PAID,
-        );
-        const hasPaidPayment = Boolean(
-          await PaymentModel.findOne({
-            $or: [
-              { bookingId: { $in: bookingIds } },
-              { bookingIds: { $in: bookingIds } },
-            ],
-            status: PaymentStatusEnum.PAID,
-          }).select("_id"),
-        );
-
-        if (hasDepositPaid || hasPaidPayment) {
-          throw ErrorHelper.requestDataInvalid(
-            "Khong the xoa user vi user da thanh toan dat san",
-          );
-        }
-      }
-
       await UserModel.deleteOne({ _id: userObjectId });
       return;
     }
@@ -537,14 +509,9 @@ class UserRoute extends BaseRoute {
     if (req.tokenInfo.role_ !== ROLES.ADMIN) {
       throw ErrorHelper.permissionDeny();
     }
-    const { userId, name, phone, email, password, role } = req.body;
+    const { userId, name, phone, password } = req.body;
     if (!userId) {
       throw ErrorHelper.requestDataInvalid("data invalid");
-    }
-    if (email !== undefined || password !== undefined || role !== undefined) {
-      throw ErrorHelper.requestDataInvalid(
-        "Chi duoc cap nhat ten va so dien thoai",
-      );
     }
     const user = await UserModel.findById(userId);
     if (!user) {
@@ -552,6 +519,7 @@ class UserRoute extends BaseRoute {
     }
     user.name = name || user.name;
     user.phone = phone || user.phone;
+    user.password = password ? passwordHash.generate(password) : user.password;
     await user.save();
     return res.status(200).json({
       status: 200,
