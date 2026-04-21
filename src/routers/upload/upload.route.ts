@@ -29,7 +29,7 @@ const storage: StorageEngine = multer.diskStorage({
 
 const upload = multer({ storage });
 
-router.post(
+router.get(
   "/upload/image",
   upload.single("file"),
   (req: Request, res: Response) => {
