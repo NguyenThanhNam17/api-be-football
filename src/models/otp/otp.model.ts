@@ -4,12 +4,11 @@ import { BaseDocument } from "../../base/baseModel";
 export type IOtpCode = BaseDocument & {
   email: string;
   purpose: string;
+  otp?: string;
   codeHash: string;
-  codeCipher?: string;
   expiresAt: Date;
   attempts: number;
   isUsed: boolean;
-  lastSentAt?: Date | null;
   verifiedAt?: Date | null;
 };
 
@@ -29,14 +28,15 @@ const otpCodeSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    otp: {
+      type: String,
+      required: false,
+      trim: true,
+      select: false,
+    },
     codeHash: {
       type: String,
       required: true,
-      trim: true,
-    },
-    codeCipher: {
-      type: String,
-      default: "",
       trim: true,
     },
     expiresAt: {
@@ -52,10 +52,6 @@ const otpCodeSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       index: true,
-    },
-    lastSentAt: {
-      type: Date,
-      default: null,
     },
     verifiedAt: {
       type: Date,
