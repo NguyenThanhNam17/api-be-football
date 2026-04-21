@@ -151,6 +151,28 @@ const serializeBooking = (
     Number(rawBooking?.remainingAmount || 0) <= 0 ||
     (latestPaymentStatus === PaymentStatusEnum.PAID &&
       latestPaymentType === "FULL");
+  const rawRemainingAmountValue = rawBooking?.remainingAmount;
+  const hasExplicitRemainingAmount =
+    rawRemainingAmountValue !== null &&
+    rawRemainingAmountValue !== undefined &&
+    (typeof rawRemainingAmountValue !== "string" ||
+      rawRemainingAmountValue.trim() !== "");
+  const parsedRemainingAmount = hasExplicitRemainingAmount
+    ? Number(rawRemainingAmountValue)
+    : Number.NaN;
+  const fallbackRemainingAmount = Math.max(
+    Number(rawBooking?.totalPrice || 0) - Number(rawBooking?.depositAmount || 0),
+    0,
+  );
+  const normalizedRemainingAmount = isFullyPaid
+    ? 0
+    : Number.isFinite(parsedRemainingAmount)
+      ? Math.max(parsedRemainingAmount, 0)
+      : String(rawBooking?.depositStatus || "")
+          .trim()
+          .toUpperCase() === DepositStatusEnum.PAID
+        ? fallbackRemainingAmount
+        : Math.max(Number(rawBooking?.totalPrice || 0), 0);
 
   return {
     ...rawBooking,
@@ -206,6 +228,7 @@ const serializeBooking = (
     paymentType: String(latestPayment?.paymentType || "").trim(),
     paymentMethod: String(latestPayment?.method || "").trim(),
     paidAmount: latestPaymentAmount,
+    remainingAmount: normalizedRemainingAmount,
     depositPaid: isDepositPaid,
     fullyPaid: isFullyPaid,
     depositPaidAt: isDepositPaid
@@ -479,6 +502,13 @@ const canOwnerManageBooking = async (ownerId: string, booking: any) => {
   return Boolean(field);
 };
 
+const sortByCreatedAtDesc = (bookings: any[] = []) =>
+  [...bookings].sort((left, right) => {
+    const leftCreatedAt = new Date(left?.createdAt || 0).getTime();
+    const rightCreatedAt = new Date(right?.createdAt || 0).getTime();
+    return rightCreatedAt - leftCreatedAt;
+  });
+
 class BookingRoute extends BaseRoute {
   constructor() {
     super();
@@ -729,102 +759,437 @@ class BookingRoute extends BaseRoute {
   }
 
   async getMyBookings(req: Request, res: Response) {
-  const query: any = {};
+    const query: any = {};
 
-  if (!req.tokenInfo) {
-    throw ErrorHelper.unauthorized();
-  }
-
-  // 👇 OWNER: lấy tất cả field của owner
-  if (req.tokenInfo.role_ === ROLES.OWNER) {
-    const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
-
-    const fieldIds = await FieldModel.find({
-      ownerUserId: ownerObjectId,
-    }).distinct("_id");
-
-    query.fieldId = { $in: fieldIds };
-  }
-
-  // 👇 USER: chỉ lấy booking của mình
-  else if (req.tokenInfo.role_ === ROLES.USER) {
-    query.userId = new Types.ObjectId(req.tokenInfo._id);
-  }
-
-  // 👇 ADMIN: không cần filter (xem tất cả)
-
-  const bookings = await BookingModel.find(query)
-    .populate("fieldId", "name address")
-    .populate("subFieldId", "name")
-    .populate("timeSlotId", "startTime endTime")
-    .sort({ createdAt: -1 });
-
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data: {
-      bookings,
-    },
-  });
-}
-
- async getDashboard(req: Request, res: Response) {
-  if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
-    throw ErrorHelper.permissionDeny();
-  }
-
-  let fieldIds: Types.ObjectId[] = [];
-
-  // 👇 OWNER → chỉ lấy sân của mình
-  if (req.tokenInfo.role_ === ROLES.OWNER) {
-    fieldIds = await FieldModel.find({
-      ownerUserId: req.tokenInfo._id,
-    }).distinct("_id");
-  } else {
-    // 👇 ADMIN → lấy tất cả
-    fieldIds = await FieldModel.find().distinct("_id");
-  }
-
-  const bookings = await BookingModel.find({
-    fieldId: { $in: fieldIds },
-  });
-
-  // 📊 thống kê
-  let totalBookings = bookings.length;
-  let pending = 0;
-  let confirmed = 0;
-  let cancelled = 0;
-  let revenue = 0;
-
-  bookings.forEach((b) => {
-    if (b.status === BookingStatusEnum.PENDING) pending++;
-    if (
-      b.status === BookingStatusEnum.CONFIRMED ||
-      b.status === BookingStatusEnum.COMPLETED
-    ) {
-      confirmed++;
-      revenue += b.totalPrice;
+    if (!req.tokenInfo) {
+      throw ErrorHelper.unauthorized();
     }
-    if (b.status === BookingStatusEnum.CANCELLED) cancelled++;
-  });
 
-  const totalFields = fieldIds.length;
+    if (req.tokenInfo.role_ === ROLES.OWNER) {
+      const ownerObjectId = new Types.ObjectId(req.tokenInfo._id);
 
-  return res.status(200).json({
-    status: 200,
-    code: "200",
-    message: "success",
-    data: {
-      totalFields,
-      totalBookings,
-      pendingBookings: pending,
-      confirmedBookings: confirmed,
-      cancelledBookings: cancelled,
-      totalRevenue: revenue,
-    },
-  });
-}
+      const fieldIds = await FieldModel.find({
+        ownerUserId: ownerObjectId,
+      }).distinct("_id");
+
+      query.fieldId = { $in: fieldIds };
+    } else if (req.tokenInfo.role_ === ROLES.USER) {
+      query.userId = new Types.ObjectId(req.tokenInfo._id);
+    }
+
+    const bookings = await BookingModel.find(query)
+      .populate("userId", "name email phone createdAt")
+      .populate("fieldId", "name address slug district ownerUserId openHours")
+      .populate("subFieldId", "name type key pricePerHour openHours")
+      .populate("timeSlotId", "startTime endTime label")
+      .sort({ createdAt: -1 });
+
+    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
+      bookings
+        .map((booking) => toObjectId(booking?._id))
+        .filter((bookingId): bookingId is Types.ObjectId => Boolean(bookingId)),
+    );
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        bookings: sortByCreatedAtDesc(
+          bookings.map((booking) =>
+            serializeBooking(booking, latestPaymentsByBookingId),
+          ),
+        ),
+      },
+    });
+  }
+
+  async getDashboard(req: Request, res: Response) {
+    if (![ROLES.ADMIN, ROLES.OWNER].includes(req.tokenInfo.role_)) {
+      throw ErrorHelper.permissionDeny();
+    }
+
+    const selectedDate = parseDashboardDate(req.query?.date);
+    const dashboardMonths = toPositiveInteger(
+      req.query?.months,
+      DEFAULT_DASHBOARD_MONTHS,
+    );
+    const recentLimit = toPositiveInteger(
+      req.query?.recentLimit,
+      DEFAULT_DASHBOARD_RECENT_LIMIT,
+    );
+    const managedLimit = toPositiveInteger(
+      req.query?.managedLimit,
+      DEFAULT_DASHBOARD_MANAGED_LIMIT,
+    );
+
+    const fieldQuery: any =
+      req.tokenInfo.role_ === ROLES.OWNER
+        ? {
+            ownerUserId: new Types.ObjectId(req.tokenInfo._id),
+          }
+        : {};
+
+    const fields = await FieldModel.find(fieldQuery).select(
+      "_id name slug address district openHours ownerUserId",
+    );
+    const fieldIds = fields
+      .map((field) => toObjectId(field?._id))
+      .filter((fieldId): fieldId is Types.ObjectId => Boolean(fieldId));
+
+    if (!fieldIds.length) {
+      return res.status(200).json({
+        status: 200,
+        code: "200",
+        message: "success",
+        data: {
+          stats: {
+            totalFields: 0,
+            totalBookings: 0,
+            pendingBookings: 0,
+            confirmedBookings: 0,
+            cancelledBookings: 0,
+            totalCustomers: 0,
+            totalRevenue: 0,
+            totalDepositsPaid: 0,
+          },
+          recentBookings: [],
+          managedBookings: [],
+          availabilityDate: selectedDate,
+          dailyAvailability: [],
+          customerMonthlyStats: [],
+          customerSummaries: [],
+        },
+      });
+    }
+
+    const now = new Date();
+    await expireStalePendingBookings(
+      {
+        fieldId: { $in: fieldIds },
+      },
+      now,
+    );
+
+    const bookings = await BookingModel.find({
+      fieldId: { $in: fieldIds },
+    })
+      .populate("userId", "name email phone createdAt")
+      .populate("fieldId", "name address slug district ownerUserId openHours")
+      .populate("subFieldId", "name type key pricePerHour openHours")
+      .populate("timeSlotId", "startTime endTime label")
+      .sort({ createdAt: -1 });
+
+    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
+      bookings
+        .map((booking) => toObjectId(booking?._id))
+        .filter((bookingId): bookingId is Types.ObjectId => Boolean(bookingId)),
+    );
+
+    const serializedBookings = bookings.map((booking) =>
+      serializeBooking(booking, latestPaymentsByBookingId),
+    );
+    const sortedDashboardBookings = sortDashboardBookings(serializedBookings);
+    const recentBookings = sortByCreatedAtDesc(serializedBookings).slice(
+      0,
+      recentLimit,
+    );
+    const managedBookings = sortedDashboardBookings
+      .filter(
+        (booking) =>
+          getBookingDateKey(booking) === selectedDate &&
+          isBlockingDashboardBooking(booking, now),
+      )
+      .slice(0, managedLimit);
+
+    let pendingBookings = 0;
+    let confirmedBookings = 0;
+    let cancelledBookings = 0;
+    let totalRevenue = 0;
+    let totalDepositsPaid = 0;
+    const customerKeys = new Set<string>();
+    const monthlyStatsMap = new Map<
+      string,
+      {
+        customerKeys: Set<string>;
+        bookings: number;
+        confirmedBookings: number;
+        cancelledBookings: number;
+        revenue: number;
+      }
+    >();
+    const customerSummariesMap = new Map<
+      string,
+      {
+        key: string;
+        id: string;
+        fullName: string;
+        email: string;
+        phone: string;
+        totalBookings: number;
+        confirmedBookings: number;
+        cancelledBookings: number;
+        totalSpent: number;
+        lastBookingAt: string | null;
+        lastFieldName: string;
+        lastTimeSlot: string;
+        lastDate: string;
+        lastStatus: string;
+      }
+    >();
+
+    serializedBookings.forEach((booking) => {
+      const status = String(booking?.status || "")
+        .trim()
+        .toUpperCase();
+      const bookingAmount = Number(booking?.totalPrice || 0);
+      const bookingDateKey = getBookingDateKey(booking);
+      const customerKey = getCustomerIdentity(booking);
+
+      if (status === BookingStatusEnum.PENDING) {
+        pendingBookings += 1;
+      } else if (status === BookingStatusEnum.CANCELLED) {
+        cancelledBookings += 1;
+      } else if (
+        status === BookingStatusEnum.CONFIRMED ||
+        status === BookingStatusEnum.COMPLETED
+      ) {
+        confirmedBookings += 1;
+        totalRevenue += bookingAmount;
+      }
+
+      if (
+        String(booking?.depositStatus || "")
+          .trim()
+          .toUpperCase() === DepositStatusEnum.PAID
+      ) {
+        totalDepositsPaid += Number(booking?.depositAmount || 0);
+      }
+
+      if (customerKey) {
+        customerKeys.add(customerKey);
+
+        const currentSummary = customerSummariesMap.get(customerKey) || {
+          key: customerKey,
+          id: String(booking?.customer?.id || "").trim(),
+          fullName: String(booking?.customer?.fullName || "").trim(),
+          email: String(booking?.customer?.email || "").trim(),
+          phone: String(booking?.customer?.phone || "").trim(),
+          totalBookings: 0,
+          confirmedBookings: 0,
+          cancelledBookings: 0,
+          totalSpent: 0,
+          lastBookingAt: null,
+          lastFieldName: "",
+          lastTimeSlot: "",
+          lastDate: "",
+          lastStatus: "",
+        };
+
+        currentSummary.totalBookings += 1;
+        if (
+          status === BookingStatusEnum.CONFIRMED ||
+          status === BookingStatusEnum.COMPLETED
+        ) {
+          currentSummary.confirmedBookings += 1;
+          currentSummary.totalSpent += bookingAmount;
+        }
+        if (status === BookingStatusEnum.CANCELLED) {
+          currentSummary.cancelledBookings += 1;
+        }
+
+        const bookingCreatedAt = booking?.createdAt
+          ? new Date(booking.createdAt)
+          : null;
+        const currentLastBookingAt = currentSummary.lastBookingAt
+          ? new Date(currentSummary.lastBookingAt)
+          : null;
+        const shouldUpdateLastBooking =
+          bookingCreatedAt &&
+          !Number.isNaN(bookingCreatedAt.getTime()) &&
+          (!currentLastBookingAt ||
+            Number.isNaN(currentLastBookingAt.getTime()) ||
+            bookingCreatedAt.getTime() > currentLastBookingAt.getTime());
+
+        if (shouldUpdateLastBooking) {
+          currentSummary.lastBookingAt = bookingCreatedAt!.toISOString();
+          currentSummary.lastFieldName = String(booking?.fieldName || "").trim();
+          currentSummary.lastTimeSlot = String(
+            booking?.timeSlotLabel || booking?.timeSlot || "",
+          ).trim();
+          currentSummary.lastDate = bookingDateKey;
+          currentSummary.lastStatus = String(booking?.status || "")
+            .trim()
+            .toLowerCase();
+        }
+
+        customerSummariesMap.set(customerKey, currentSummary);
+      }
+
+      const monthKey = getMonthKey(booking?.date);
+      if (monthKey) {
+        const currentMonthlyStats = monthlyStatsMap.get(monthKey) || {
+          customerKeys: new Set<string>(),
+          bookings: 0,
+          confirmedBookings: 0,
+          cancelledBookings: 0,
+          revenue: 0,
+        };
+
+        currentMonthlyStats.bookings += 1;
+        if (
+          status === BookingStatusEnum.CONFIRMED ||
+          status === BookingStatusEnum.COMPLETED
+        ) {
+          currentMonthlyStats.confirmedBookings += 1;
+          currentMonthlyStats.revenue += bookingAmount;
+        }
+        if (status === BookingStatusEnum.CANCELLED) {
+          currentMonthlyStats.cancelledBookings += 1;
+        }
+        if (customerKey) {
+          currentMonthlyStats.customerKeys.add(customerKey);
+        }
+
+        monthlyStatsMap.set(monthKey, currentMonthlyStats);
+      }
+    });
+
+    const allSubFields = await SubFieldModel.find({
+      fieldId: { $in: fieldIds },
+      isDeleted: { $ne: true },
+    }).sort({ createdAt: 1 });
+
+    const subFieldsByFieldId = new Map<string, any[]>();
+    allSubFields.forEach((subField) => {
+      const normalizedFieldId = String(subField?.fieldId || "").trim();
+      if (!normalizedFieldId) {
+        return;
+      }
+
+      const currentSubFields = subFieldsByFieldId.get(normalizedFieldId) || [];
+      currentSubFields.push(subField);
+      subFieldsByFieldId.set(normalizedFieldId, currentSubFields);
+    });
+
+    const selectedDateBookings = sortedDashboardBookings.filter(
+      (booking) => getBookingDateKey(booking) === selectedDate,
+    );
+    const blockingBookingsBySubFieldId = new Map<string, any[]>();
+    selectedDateBookings.forEach((booking) => {
+      if (!isBlockingDashboardBooking(booking, now)) {
+        return;
+      }
+
+      const subFieldId = String(booking?.subFieldId || "").trim();
+      if (!subFieldId) {
+        return;
+      }
+
+      const currentBookings = blockingBookingsBySubFieldId.get(subFieldId) || [];
+      currentBookings.push(booking);
+      blockingBookingsBySubFieldId.set(subFieldId, currentBookings);
+    });
+
+    const dailyAvailability = fields.map((field) => {
+      const normalizedFieldId = String(field?._id || "").trim();
+      const fieldSubFields = subFieldsByFieldId.get(normalizedFieldId) || [];
+
+      const serializedSubFields = fieldSubFields.map((subField) => {
+        const normalizedSubFieldId = String(subField?._id || "").trim();
+        const subFieldBookings =
+          blockingBookingsBySubFieldId.get(normalizedSubFieldId) || [];
+
+        return {
+          key: String(subField?.key || "").trim(),
+          name: String(subField?.name || "").trim(),
+          type: String(subField?.type || "").trim(),
+          pricePerHour: Number(subField?.pricePerHour || 0),
+          isAvailable: subFieldBookings.length === 0,
+          bookings: subFieldBookings.map((booking) => ({
+            id: String(booking?.id || booking?._id || "").trim(),
+            timeSlot: String(
+              booking?.timeSlotLabel || booking?.timeSlot || "",
+            ).trim(),
+            status: String(booking?.status || "").trim().toLowerCase(),
+            customerName: String(booking?.customer?.fullName || "").trim(),
+            phone: String(booking?.customer?.phone || booking?.phone || "")
+              .trim(),
+          })),
+        };
+      });
+
+      const availableSubFields = serializedSubFields.filter(
+        (subField) => subField.isAvailable,
+      ).length;
+      const bookingCount = serializedSubFields.reduce(
+        (sum, subField) => sum + Number(subField?.bookings?.length || 0),
+        0,
+      );
+
+      return {
+        id: String(field?._id || "").trim(),
+        name: String(field?.name || "").trim(),
+        slug: String(field?.slug || "").trim(),
+        address: String(field?.address || "").trim(),
+        district: String(field?.district || "").trim(),
+        openHours: String(field?.openHours || "").trim(),
+        totalSubFields: serializedSubFields.length,
+        availableSubFields,
+        bookingCount,
+        subFields: serializedSubFields,
+      };
+    });
+
+    const customerMonthlyStats = Array.from(monthlyStatsMap.entries())
+      .sort(([leftMonth], [rightMonth]) => rightMonth.localeCompare(leftMonth))
+      .slice(0, dashboardMonths)
+      .map(([monthKey, value]) => ({
+        monthKey,
+        label: getMonthLabel(monthKey),
+        uniqueCustomers: value.customerKeys.size,
+        bookings: value.bookings,
+        confirmedBookings: value.confirmedBookings,
+        cancelledBookings: value.cancelledBookings,
+        revenue: Math.round(value.revenue),
+      }));
+
+    const customerSummaries = Array.from(customerSummariesMap.values())
+      .sort((left, right) => {
+        if (right.totalBookings !== left.totalBookings) {
+          return right.totalBookings - left.totalBookings;
+        }
+
+        const leftLastBookingAt = new Date(left.lastBookingAt || 0).getTime();
+        const rightLastBookingAt = new Date(right.lastBookingAt || 0).getTime();
+        return rightLastBookingAt - leftLastBookingAt;
+      })
+      .slice(0, managedLimit);
+
+    return res.status(200).json({
+      status: 200,
+      code: "200",
+      message: "success",
+      data: {
+        stats: {
+          totalFields: fieldIds.length,
+          totalBookings: serializedBookings.length,
+          pendingBookings,
+          confirmedBookings,
+          cancelledBookings,
+          totalCustomers: customerKeys.size,
+          totalRevenue: Math.round(totalRevenue),
+          totalDepositsPaid: Math.round(totalDepositsPaid),
+        },
+        recentBookings,
+        managedBookings,
+        availabilityDate: selectedDate,
+        dailyAvailability,
+        customerMonthlyStats,
+        customerSummaries,
+      },
+    });
+  }
 
   async cancelBooking(req: Request, res: Response) {
     const { id } = req.params;
@@ -861,10 +1226,28 @@ class BookingRoute extends BaseRoute {
 
     await booking.save();
 
+    const latestBooking = await BookingModel.findOne({
+      _id: booking._id,
+    })
+      .populate("userId", "name email phone createdAt")
+      .populate("fieldId", "name address slug district ownerUserId openHours")
+      .populate("subFieldId", "name type key pricePerHour openHours")
+      .populate("timeSlotId", "startTime endTime label");
+    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
+      [toObjectId(booking?._id)].filter(
+        (bookingId): bookingId is Types.ObjectId => Boolean(bookingId),
+      ),
+    );
+
     return res.status(200).json({
       status: 200,
       code: "200",
       message: "success",
+      data: {
+        booking: latestBooking
+          ? serializeBooking(latestBooking, latestPaymentsByBookingId)
+          : undefined,
+      },
     });
   }
 
@@ -903,16 +1286,32 @@ class BookingRoute extends BaseRoute {
 
     if (status === BookingStatusEnum.CONFIRMED) {
       booking.expiredAt = undefined;
-      booking.depositStatus = DepositStatusEnum.PAID;
     }
 
     await booking.save();
+
+    const latestBooking = await BookingModel.findOne({
+      _id: booking._id,
+    })
+      .populate("userId", "name email phone createdAt")
+      .populate("fieldId", "name address slug district ownerUserId openHours")
+      .populate("subFieldId", "name type key pricePerHour openHours")
+      .populate("timeSlotId", "startTime endTime label");
+    const latestPaymentsByBookingId = await getLatestPaymentsByBookingIds(
+      [toObjectId(booking?._id)].filter(
+        (bookingId): bookingId is Types.ObjectId => Boolean(bookingId),
+      ),
+    );
 
     return res.status(200).json({
       status: 200,
       code: "200",
       message: "success",
-      data: { booking },
+      data: {
+        booking: latestBooking
+          ? serializeBooking(latestBooking, latestPaymentsByBookingId)
+          : booking,
+      },
     });
   }
 
