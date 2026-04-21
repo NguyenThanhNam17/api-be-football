@@ -343,7 +343,7 @@ class UserRoute extends BaseRoute {
     });
   }
 
- async createUser(req: Request, res: Response) {
+  async createUser(req: Request, res: Response) {
   // 🔐 chỉ admin được tạo
   if (req.tokenInfo.role_ !== ROLES.ADMIN) {
     throw ErrorHelper.permissionDeny();
@@ -400,9 +400,43 @@ class UserRoute extends BaseRoute {
       token: new UserHelper(user).getToken(key),
     },
   });
-}
+  }
+
+  private async ensureUserHasNoPaidBookings(userObjectId: Types.ObjectId) {
+    const userBookings = await BookingModel.find({
+      userId: userObjectId,
+    }).select("_id depositStatus");
+
+    if (userBookings.length === 0) {
+      return;
+    }
+
+    const bookingIds = userBookings.map((booking: any) => booking._id);
+    const hasDepositPaid = userBookings.some(
+      (booking: any) =>
+        String(booking?.depositStatus || "").trim().toUpperCase() ===
+        DepositStatusEnum.PAID,
+    );
+    const hasPaidPayment = Boolean(
+      await PaymentModel.findOne({
+        $or: [
+          { bookingId: { $in: bookingIds } },
+          { bookingIds: { $in: bookingIds } },
+        ],
+        status: PaymentStatusEnum.PAID,
+      }).select("_id"),
+    );
+
+    if (hasDepositPaid || hasPaidPayment) {
+      throw ErrorHelper.requestDataInvalid(
+        "Khong the xoa user vi user da thanh toan dat san",
+      );
+    }
+  }
 
   private async deleteUserWithOwnerConstraints(userObjectId: Types.ObjectId) {
+    await this.ensureUserHasNoPaidBookings(userObjectId);
+
     const fields = await FieldModel.find({ ownerUserId: userObjectId }).select("_id");
     const fieldIds = fields.map((field: any) => field._id);
 
