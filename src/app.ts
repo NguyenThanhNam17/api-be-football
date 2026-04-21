@@ -2,6 +2,7 @@ import express from "express";
 import router from "./routers";
 import cors from "cors";
 import cron from "node-cron";
+import path from "path";
 import { autoCancelBooking } from "./jobs/booking.job";
 import { ensureUploadDirectory, UPLOAD_PUBLIC_PATH } from "./helper/upload.helper";
 
@@ -18,6 +19,8 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
   }),
 );
+
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 
 cron.schedule("* * * * *", async () => {
