@@ -135,7 +135,7 @@ class SubFieldRoute extends BaseRoute {
     }
 
     // 5. Chỉ cho tạo nếu field đã APPROVED
-    if (field.status !== FieldStatusEnum.APPROVED) {
+    if (field.status !== FieldStatusEnum.APPROVED && field.status !== FieldStatusEnum.PENDING) {
       throw ErrorHelper.requestDataInvalid("Sân chưa được duyệt");
     }
 
