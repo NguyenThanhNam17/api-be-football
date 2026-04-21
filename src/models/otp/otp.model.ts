@@ -4,7 +4,6 @@ import { BaseDocument } from "../../base/baseModel";
 export type IOtpCode = BaseDocument & {
   email: string;
   purpose: string;
-  otp?: string;
   codeHash: string;
   expiresAt: Date;
   attempts: number;
@@ -27,12 +26,6 @@ const otpCodeSchema = new mongoose.Schema(
       default: "auth",
       trim: true,
       index: true,
-    },
-    otp: {
-      type: String,
-      required: false,
-      trim: true,
-      select: false,
     },
     codeHash: {
       type: String,

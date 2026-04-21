@@ -4,6 +4,7 @@ import { OtpCodeModel } from "../models/otp/otp.model";
 const OTP_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_SECRET = String(process.env.OTP_SECRET || process.env.SECRET || "otp-secret").trim();
 const OTP_EXPIRES_MINUTES = Math.max(Number(process.env.OTP_EXPIRES_MINUTES || 5), 1);
+const OTP_RESEND_SECONDS = Math.max(Number(process.env.OTP_RESEND_SECONDS || 60), 0);
 const OTP_MAX_ATTEMPTS = Math.max(Number(process.env.OTP_MAX_ATTEMPTS || 5), 1);
 const OTP_CODE_LENGTH = Math.min(Math.max(Number(process.env.OTP_CODE_LENGTH || 6), 4), 8);
 
@@ -52,27 +53,19 @@ export const issueOtpCode = async ({
     email: normalizedEmail,
     purpose: normalizedPurpose,
     isUsed: false,
-    expiresAt: { $gt: now },
-  })
-    .select("+otp")
-    .sort({ createdAt: -1 });
+  }).sort({ createdAt: -1 });
 
-  if (latestActiveOtp && latestActiveOtp.expiresAt?.getTime() > now.getTime()) {
-    const reusableOtp = String((latestActiveOtp as any)?.otp || "").trim();
-
-    if (reusableOtp) {
-      return {
-        otpId: String(latestActiveOtp._id || "").trim(),
-        otp: reusableOtp,
-        expiresAt: latestActiveOtp.expiresAt,
-        expiresInMinutes: Math.max(
-          Math.ceil((latestActiveOtp.expiresAt.getTime() - now.getTime()) / (60 * 1000)),
-          1,
-        ),
-        purpose: normalizedPurpose,
-        email: normalizedEmail,
-      };
-    }
+  if (
+    latestActiveOtp &&
+    latestActiveOtp.expiresAt &&
+    latestActiveOtp.expiresAt.getTime() > now.getTime() &&
+    latestActiveOtp.createdAt &&
+    now.getTime() - latestActiveOtp.createdAt.getTime() < OTP_RESEND_SECONDS * 1000
+  ) {
+    const remainSeconds = Math.ceil(
+      (OTP_RESEND_SECONDS * 1000 - (now.getTime() - latestActiveOtp.createdAt.getTime())) / 1000,
+    );
+    throw new Error(`Please wait ${Math.max(remainSeconds, 1)}s before requesting a new OTP.`);
   }
 
   const otp = createOtpCode();
@@ -82,7 +75,6 @@ export const issueOtpCode = async ({
   const otpDoc = await OtpCodeModel.create({
     email: normalizedEmail,
     purpose: normalizedPurpose,
-    otp,
     codeHash,
     expiresAt,
     attempts: 0,
