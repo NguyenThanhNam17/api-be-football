@@ -4,8 +4,26 @@ import { OtpCodeModel } from "../models/otp/otp.model";
 const OTP_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_SECRET = String(process.env.OTP_SECRET || process.env.SECRET || "otp-secret").trim();
 const OTP_EXPIRES_MINUTES = Math.max(Number(process.env.OTP_EXPIRES_MINUTES || 5), 1);
+const OTP_RESEND_SECONDS = Math.max(Number(process.env.OTP_RESEND_SECONDS || 60), 0);
 const OTP_MAX_ATTEMPTS = Math.max(Number(process.env.OTP_MAX_ATTEMPTS || 5), 1);
 const OTP_CODE_LENGTH = Math.min(Math.max(Number(process.env.OTP_CODE_LENGTH || 6), 4), 8);
+const OTP_CIPHER_ALGORITHM = "aes-256-gcm";
+const OTP_ENCRYPTION_KEY = crypto
+  .createHash("sha256")
+  .update(`otp-cipher|${OTP_SECRET}`)
+  .digest();
+
+type IssuedOtpPayload = {
+  otpId: string;
+  otp: string;
+  expiresAt: Date;
+  expiresInMinutes: number;
+  purpose: string;
+  email: string;
+  resendAvailableAt: Date;
+  shouldInvalidateOnSendFailure: boolean;
+  reusedActiveOtp: boolean;
+};
 
 const normalizeOtpEmail = (value: string) => String(value || "").trim().toLowerCase();
 
@@ -33,13 +51,59 @@ const buildOtpHash = (email: string, purpose: string, otp: string) =>
     .update(`${normalizeOtpEmail(email)}|${normalizeOtpPurpose(purpose)}|${String(otp || "").trim()}|${OTP_SECRET}`)
     .digest("hex");
 
+const encryptOtpCode = (otp: string) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(OTP_CIPHER_ALGORITHM, OTP_ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(String(otp || "").trim(), "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  return `${iv.toString("hex")}.${authTag.toString("hex")}.${encrypted.toString("hex")}`;
+};
+
+const decryptOtpCode = (value: string) => {
+  const normalizedValue = String(value || "").trim();
+
+  if (!normalizedValue) {
+    return "";
+  }
+
+  const [ivHex, authTagHex, encryptedHex] = normalizedValue.split(".");
+
+  if (!ivHex || !authTagHex || !encryptedHex) {
+    return "";
+  }
+
+  try {
+    const decipher = crypto.createDecipheriv(
+      OTP_CIPHER_ALGORITHM,
+      OTP_ENCRYPTION_KEY,
+      Buffer.from(ivHex, "hex"),
+    );
+    decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encryptedHex, "hex")),
+      decipher.final(),
+    ]);
+
+    return decrypted.toString("utf8").trim();
+  } catch (_error) {
+    return "";
+  }
+};
+
+const getOtpResendAvailableAt = (dateValue: Date) =>
+  new Date(dateValue.getTime() + OTP_RESEND_SECONDS * 1000);
+
+const getOtpExpiresInMinutes = (expiresAt: Date, now: Date) =>
+  Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / (60 * 1000)));
+
 export const issueOtpCode = async ({
   email,
   purpose = "auth",
 }: {
   email: string;
   purpose?: string;
-}) => {
+}): Promise<IssuedOtpPayload> => {
   const normalizedEmail = normalizeOtpEmail(email);
   const normalizedPurpose = normalizeOtpPurpose(purpose);
   const now = new Date();
@@ -53,40 +117,54 @@ export const issueOtpCode = async ({
     purpose: normalizedPurpose,
     isUsed: false,
     expiresAt: { $gt: now },
-  })
-    .select("+otp")
-    .sort({ createdAt: -1 });
+  }).sort({ lastSentAt: -1, createdAt: -1 });
 
-  if (latestActiveOtp && latestActiveOtp.expiresAt?.getTime() > now.getTime()) {
-    const reusableOtp = String((latestActiveOtp as any)?.otp || "").trim();
+  if (latestActiveOtp) {
+    const reusableOtp = decryptOtpCode(String(latestActiveOtp.codeCipher || "").trim());
 
     if (reusableOtp) {
+      const lastSentAt = latestActiveOtp.lastSentAt || latestActiveOtp.createdAt || now;
+      const resendAvailableAt = getOtpResendAvailableAt(lastSentAt);
+
+      if (resendAvailableAt.getTime() > now.getTime()) {
+        const remainSeconds = Math.ceil(
+          (resendAvailableAt.getTime() - now.getTime()) / 1000,
+        );
+        throw new Error(`Please wait ${Math.max(remainSeconds, 1)}s before requesting a new OTP.`);
+      }
+
       return {
         otpId: String(latestActiveOtp._id || "").trim(),
         otp: reusableOtp,
         expiresAt: latestActiveOtp.expiresAt,
-        expiresInMinutes: Math.max(
-          Math.ceil((latestActiveOtp.expiresAt.getTime() - now.getTime()) / (60 * 1000)),
-          1,
-        ),
+        expiresInMinutes: getOtpExpiresInMinutes(latestActiveOtp.expiresAt, now),
         purpose: normalizedPurpose,
         email: normalizedEmail,
+        resendAvailableAt: getOtpResendAvailableAt(now),
+        shouldInvalidateOnSendFailure: false,
+        reusedActiveOtp: true,
       };
     }
+
+    latestActiveOtp.isUsed = true;
+    latestActiveOtp.expiresAt = now;
+    await latestActiveOtp.save();
   }
 
   const otp = createOtpCode();
   const expiresAt = new Date(now.getTime() + OTP_EXPIRES_MINUTES * 60 * 1000);
   const codeHash = buildOtpHash(normalizedEmail, normalizedPurpose, otp);
+  const codeCipher = encryptOtpCode(otp);
 
   const otpDoc = await OtpCodeModel.create({
     email: normalizedEmail,
     purpose: normalizedPurpose,
-    otp,
     codeHash,
+    codeCipher,
     expiresAt,
     attempts: 0,
     isUsed: true,
+    lastSentAt: null,
   });
 
   return {
@@ -96,6 +174,9 @@ export const issueOtpCode = async ({
     expiresInMinutes: OTP_EXPIRES_MINUTES,
     purpose: normalizedPurpose,
     email: normalizedEmail,
+    resendAvailableAt: getOtpResendAvailableAt(now),
+    shouldInvalidateOnSendFailure: true,
+    reusedActiveOtp: false,
   };
 };
 
@@ -138,6 +219,7 @@ export const activateIssuedOtpCode = async ({
     {
       $set: {
         isUsed: false,
+        lastSentAt: now,
       },
     },
   );
@@ -150,7 +232,7 @@ export const invalidateOtpCode = async (otpId: string) => {
   }
 
   await OtpCodeModel.updateOne(
-    { _id: normalizedOtpId, isUsed: false },
+    { _id: normalizedOtpId },
     {
       $set: {
         isUsed: true,
